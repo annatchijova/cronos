@@ -1,0 +1,220 @@
+"""
+CRONOS — SQLite persistence layer.
+WAL mode enables concurrent reads while a trace is being written.
+All writes to traces + steps + chain land in a single atomic commit.
+"""
+
+import json
+import sqlite3
+from fractions import Fraction
+from typing import Optional
+
+from .chain import TraceChain
+from .models import Trace, TraceStep, StepKind
+
+
+def _fraction_to_str(f: Optional[Fraction]) -> str:
+    if f is None:
+        return "0/1"
+    return f"{f.numerator}/{f.denominator}"
+
+
+def _str_to_fraction(s: Optional[str]) -> Optional[Fraction]:
+    if not s:
+        return None
+    p, q = s.split("/")
+    return Fraction(int(p), int(q))
+
+
+class TraceStore:
+    """
+    Persists Trace objects (header + steps) to SQLite.
+    Each save_trace() call also appends one entry to the TraceChain,
+    and everything lands in a single conn.commit().
+    """
+
+    def __init__(self, db_path: str = "cronos.db") -> None:
+        self._path = db_path
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._ensure_tables()
+        self.chain = TraceChain(self._conn)
+
+    def _ensure_tables(self) -> None:
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS traces (
+                trace_id    TEXT PRIMARY KEY,
+                agent_id    TEXT NOT NULL,
+                channel_id  TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                objective   TEXT NOT NULL,
+                decision    TEXT,
+                confidence  TEXT,
+                started_at  TEXT NOT NULL,
+                closed_at   TEXT,
+                entry_hash  TEXT,
+                chain_ok    INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS trace_steps (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id    TEXT NOT NULL REFERENCES traces(trace_id),
+                seq         INTEGER NOT NULL,
+                kind        TEXT NOT NULL,
+                payload     TEXT NOT NULL,
+                timestamp   TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steps_trace
+                ON trace_steps(trace_id, seq);
+            CREATE INDEX IF NOT EXISTS idx_traces_agent
+                ON traces(agent_id);
+            CREATE INDEX IF NOT EXISTS idx_traces_channel
+                ON traces(channel_id);
+            CREATE INDEX IF NOT EXISTS idx_traces_closed
+                ON traces(closed_at DESC);
+        """)
+        self._conn.commit()
+
+    def save_trace(self, trace: Trace) -> None:
+        """
+        Atomically persist a closed Trace:
+          1. Append to hash chain (no internal commit)
+          2. Insert trace header
+          3. Insert all steps
+          4. Single conn.commit() — all or nothing
+        """
+        conf_str = _fraction_to_str(trace.confidence)
+        decision  = trace.decision or ""
+
+        # Chain append — no commit, caller (us) owns the transaction
+        entry_hash = self.chain.append(
+            trace.trace_id, trace.agent_id,
+            trace.objective, decision, conf_str,
+        )
+        trace.entry_hash = entry_hash
+        trace.chain_ok   = True
+
+        self._conn.execute("""
+            INSERT OR REPLACE INTO traces
+                (trace_id, agent_id, channel_id, user_id, objective,
+                 decision, confidence, started_at, closed_at, entry_hash, chain_ok)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """, (
+            trace.trace_id, trace.agent_id, trace.channel_id, trace.user_id,
+            trace.objective, decision, conf_str,
+            trace.started_at, trace.closed_at, entry_hash,
+        ))
+
+        for seq, step in enumerate(trace.steps):
+            self._conn.execute("""
+                INSERT INTO trace_steps (trace_id, seq, kind, payload, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                trace.trace_id, seq, step.kind.value,
+                json.dumps(step.payload, ensure_ascii=False, sort_keys=True),
+                step.timestamp,
+            ))
+
+        self._conn.commit()  # single commit: chain + header + steps
+
+    def load_trace(self, trace_id: str) -> Optional[Trace]:
+        """Load a full Trace including all steps."""
+        row = self._conn.execute(
+            """SELECT trace_id, agent_id, channel_id, user_id, objective,
+                      decision, confidence, started_at, closed_at, entry_hash, chain_ok
+               FROM traces WHERE trace_id = ?""",
+            (trace_id,),
+        ).fetchone()
+        if not row:
+            return None
+
+        (tid, agent_id, channel_id, user_id, objective,
+         decision, confidence, started_at, closed_at, entry_hash, chain_ok) = row
+
+        step_rows = self._conn.execute(
+            "SELECT kind, payload, timestamp FROM trace_steps "
+            "WHERE trace_id = ? ORDER BY seq",
+            (tid,),
+        ).fetchall()
+
+        steps = [
+            TraceStep(
+                kind=StepKind(r[0]),
+                payload=json.loads(r[1]),
+                timestamp=r[2],
+            )
+            for r in step_rows
+        ]
+
+        return Trace(
+            trace_id=tid,
+            agent_id=agent_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            objective=objective,
+            steps=steps,
+            decision=decision or None,
+            confidence=_str_to_fraction(confidence),
+            started_at=started_at,
+            closed_at=closed_at,
+            entry_hash=entry_hash,
+            chain_ok=bool(chain_ok),
+            closed=True,
+        )
+
+    def get_latest_trace(
+        self,
+        agent_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
+    ) -> Optional[Trace]:
+        """Return the most recently closed trace, optionally filtered."""
+        if agent_id and channel_id:
+            row = self._conn.execute(
+                "SELECT trace_id FROM traces "
+                "WHERE agent_id = ? AND channel_id = ? ORDER BY closed_at DESC LIMIT 1",
+                (agent_id, channel_id),
+            ).fetchone()
+        elif agent_id:
+            row = self._conn.execute(
+                "SELECT trace_id FROM traces WHERE agent_id = ? ORDER BY closed_at DESC LIMIT 1",
+                (agent_id,),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT trace_id FROM traces ORDER BY closed_at DESC LIMIT 1"
+            ).fetchone()
+        return self.load_trace(row[0]) if row else None
+
+    def get_recent_traces(
+        self,
+        agent_id: Optional[str] = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Return lightweight headers (no steps) for listing."""
+        if agent_id:
+            rows = self._conn.execute("""
+                SELECT trace_id, agent_id, objective, decision, confidence,
+                       closed_at, entry_hash, chain_ok
+                FROM traces WHERE agent_id = ? ORDER BY closed_at DESC LIMIT ?
+            """, (agent_id, limit)).fetchall()
+        else:
+            rows = self._conn.execute("""
+                SELECT trace_id, agent_id, objective, decision, confidence,
+                       closed_at, entry_hash, chain_ok
+                FROM traces ORDER BY closed_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+
+        keys = [
+            "trace_id", "agent_id", "objective", "decision", "confidence",
+            "closed_at", "entry_hash", "chain_ok",
+        ]
+        return [dict(zip(keys, r)) for r in rows]
+
+    def count_traces(self, agent_id: Optional[str] = None) -> int:
+        if agent_id:
+            return self._conn.execute(
+                "SELECT COUNT(*) FROM traces WHERE agent_id = ?", (agent_id,)
+            ).fetchone()[0]
+        return self._conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
