@@ -5,9 +5,12 @@ All writes to traces + steps + chain land in a single atomic commit.
 """
 
 import json
+import logging
 import sqlite3
 from fractions import Fraction
 from typing import Optional
+
+log = logging.getLogger("cronos.store")
 
 from .chain import TraceChain
 from .models import Trace, TraceStep, StepKind, TraceQuality
@@ -22,8 +25,12 @@ def _fraction_to_str(f: Optional[Fraction]) -> str:
 def _str_to_fraction(s: Optional[str]) -> Optional[Fraction]:
     if not s:
         return None
-    p, q = s.split("/")
-    return Fraction(int(p), int(q))
+    try:
+        p, q = s.split("/")
+        return Fraction(int(p), int(q))
+    except (ValueError, ZeroDivisionError):
+        log.warning("Malformed fraction string in DB: %r — treating as None", s)
+        return None
 
 
 class TraceStore:
@@ -64,7 +71,7 @@ class TraceStore:
 
             CREATE TABLE IF NOT EXISTS trace_steps (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                trace_id    TEXT NOT NULL REFERENCES traces(trace_id),
+                trace_id    TEXT NOT NULL REFERENCES traces(trace_id) ON DELETE CASCADE,
                 seq         INTEGER NOT NULL,
                 kind        TEXT NOT NULL,
                 payload     TEXT NOT NULL,
@@ -81,6 +88,39 @@ class TraceStore:
                 ON traces(closed_at DESC);
         """)
         self._conn.commit()
+        self._migrate_trace_steps_cascade()
+
+    def _migrate_trace_steps_cascade(self) -> None:
+        """
+        One-time migration: recreate trace_steps with ON DELETE CASCADE if the
+        existing table was created without it.  SQLite does not support ALTER TABLE
+        to modify FK actions, so we rename + recreate + copy.
+        """
+        fk_list = self._conn.execute(
+            "PRAGMA foreign_key_list(trace_steps)"
+        ).fetchall()
+        if not fk_list:
+            return  # table does not exist yet — CREATE TABLE already has CASCADE
+        has_cascade = any(row[6] == "CASCADE" for row in fk_list)
+        if has_cascade:
+            return  # already correct
+        log.info("Migrating trace_steps → adding ON DELETE CASCADE (one-time)")
+        self._conn.executescript("""
+            ALTER TABLE trace_steps RENAME TO _trace_steps_old;
+            CREATE TABLE trace_steps (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id  TEXT    NOT NULL REFERENCES traces(trace_id) ON DELETE CASCADE,
+                seq       INTEGER NOT NULL,
+                kind      TEXT    NOT NULL,
+                payload   TEXT    NOT NULL,
+                timestamp TEXT    NOT NULL
+            );
+            INSERT INTO trace_steps SELECT * FROM _trace_steps_old;
+            DROP TABLE _trace_steps_old;
+            CREATE INDEX IF NOT EXISTS idx_steps_trace ON trace_steps(trace_id, seq);
+        """)
+        self._conn.commit()
+        log.info("trace_steps migration complete")
 
     def save_trace(self, trace: Trace) -> None:
         """

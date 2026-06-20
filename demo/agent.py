@@ -151,10 +151,12 @@ class DemoAgent:
     Each handle_message() call generates one complete, traceable decision cycle.
     """
 
-    # Trigger patterns — the agent activates on these
+    # Trigger patterns — require specific ticket/issue context to avoid
+    # false positives on everyday words like "fix my lunch".
     _TRIGGER = re.compile(
-        r"\bticket\s*#?(\d+)\b"
-        r"|\b(fix|resolve|investigate|debug|check)\b",
+        r"\bticket\s*#?\d+\b"                                          # "ticket #42"
+        r"|\b(fix|resolve|investigate|debug)\s+"
+        r"(ticket|issue|bug|error|incident|problem|outage|alert)\b",   # "fix issue"
         re.IGNORECASE,
     )
 

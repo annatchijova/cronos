@@ -34,8 +34,13 @@ def _compute_entry_hash(
         "confidence": confidence,
         "prev_hash":  prev_hash,
     }
+    # separators=(',', ':') removes all whitespace from JSON output so the hash
+    # is byte-for-byte identical across Python versions and across independent
+    # verifier implementations.  json.dumps default includes spaces after
+    # separators, which would silently break cross-implementation verification.
     raw = (
-        json.dumps(canonical, sort_keys=True, ensure_ascii=False) + prev_hash
+        json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+        + prev_hash
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 

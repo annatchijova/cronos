@@ -170,6 +170,38 @@ class TestFormatStatus:
         assert "support-resolver" in text
 
 
+class TestOutputLimits:
+    def test_explain_blocks_never_exceed_slack_limit(self, store):
+        """format_trace_explain must never return > 50 blocks (Slack hard limit)."""
+        # Build a trace with many steps to stress the block count
+        with CronosTracer(store, "ag", "C1", "U1", "Big trace") as t:
+            for i in range(15):
+                t.record_recall(f"M-{i}", f"memory {i}", score=Fraction(50 + i, 100))
+            for i in range(10):
+                t.call_tool(f"tool{i}", f"result {i}")
+            for i in range(10):
+                t.add_hypothesis(f"h{i}", f"desc {i}")
+            for i in range(5):
+                t.add_evidence(f"evidence {i}", supports="h0")
+            for i in range(5):
+                t.add_evidence(f"counter {i}", refutes="h1")
+            t.decide("complex action", Fraction(70, 100))
+        trace = store.get_latest_trace()
+        blocks = format_trace_explain(trace)
+        assert len(blocks) <= 50, f"Got {len(blocks)} blocks — exceeds Slack limit"
+
+    def test_trunc_short_text_unchanged(self):
+        from slack.output import _trunc
+        assert _trunc("hello") == "hello"
+
+    def test_trunc_long_text_cut(self):
+        from slack.output import _trunc
+        text = "x" * 4000
+        result = _trunc(text, max_len=3000)
+        assert len(result) == 3000
+        assert result.endswith("…")
+
+
 class TestHelpers:
     @pytest.mark.parametrize("pct,expected", [
         ("0%",   "[░░░░░░░░░░]"),

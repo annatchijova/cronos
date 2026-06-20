@@ -270,8 +270,13 @@ class Narrator:
             return f"Decision: {decision}. Confidence: {conf_pct}."
 
         body = "; ".join(parts)
-        return (
+        prose = (
             f"Because {body} — "
             f"I decided to {decision} "
             f"({conf_label}, {conf_pct})."
         )
+        # Hard cap to stay within Slack's 3000-char per-block limit with headroom.
+        _MAX = 2800
+        if len(prose) > _MAX:
+            prose = prose[: _MAX - 1] + "…"
+        return prose

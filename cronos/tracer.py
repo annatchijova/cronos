@@ -34,10 +34,13 @@ Usage
         t.decide("Apply auth token reset", confidence=Fraction(74, 100))
 """
 
+import logging
 from datetime import datetime, timezone
 from fractions import Fraction
 from typing import Optional
 from uuid import uuid4
+
+log = logging.getLogger("cronos.tracer")
 
 from .models import Trace, TraceStep, StepKind
 from .quality import (
@@ -129,7 +132,19 @@ class CronosTracer:
                         step.payload["confidence_warnings"] = warnings
                     break
 
-        self._store.save_trace(self.trace)
+        try:
+            self._store.save_trace(self.trace)
+        except Exception as store_err:  # noqa: BLE001
+            # Log storage failure but never mask the agent's own exception.
+            # If exc_type is set, the agent already failed — the caller will
+            # see that exception, not this one.  If exc_type is None, this
+            # raises from here, which is the correct behavior.
+            log.error(
+                "CRONOS: failed to persist trace %s — reasoning was NOT recorded: %s",
+                self.trace.trace_id[:8],
+                store_err,
+            )
+            raise
         return False  # never suppress exceptions
 
     # ── Recording API ─────────────────────────────────────────────────────────
@@ -190,6 +205,11 @@ class CronosTracer:
         supports: label of the hypothesis this evidence supports (optional)
         refutes:  label of the hypothesis this evidence refutes (optional)
         """
+        if supports and refutes:
+            raise ValueError(
+                "add_evidence: a single piece of evidence cannot both support and refute. "
+                "Call add_evidence twice if the fact is ambiguous."
+            )
         payload: dict = {"text": text}
         if supports:
             payload["supports"] = supports
@@ -214,6 +234,11 @@ class CronosTracer:
             raise TypeError(
                 "confidence must be fractions.Fraction — "
                 f"got {type(confidence).__name__}. CRONOS uses no floats."
+            )
+        if not (Fraction(0) <= confidence <= Fraction(1)):
+            raise ValueError(
+                f"confidence must be in [0, 1] — got {confidence}. "
+                "Use Fraction(0) for no confidence, Fraction(1) for certainty."
             )
         self.trace.decision   = decision
         self.trace.confidence = confidence

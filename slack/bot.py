@@ -5,6 +5,7 @@ action handler for "Explain →" buttons.
 """
 
 import logging
+from collections import OrderedDict
 
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -15,6 +16,27 @@ from slack.commands import register_commands
 from demo.agent import DemoAgent
 
 log = logging.getLogger("cronos.bot")
+
+# ── Event deduplication ───────────────────────────────────────────────────────
+# Slack retries failed events with identical ts+client_msg_id.  A simple
+# bounded LRU set prevents double-processing without any external state.
+
+_SEEN_EVENTS: OrderedDict[str, None] = OrderedDict()
+_MAX_SEEN_EVENTS = 500
+
+
+def _is_duplicate(event: dict) -> bool:
+    """Return True and skip if this event was already processed."""
+    key = f"{event.get('client_msg_id', '')}-{event.get('ts', '')}"
+    if not key or key == "-":
+        return False  # no usable key — let it through
+    if key in _SEEN_EVENTS:
+        log.debug("Duplicate event skipped: %s", key)
+        return True
+    _SEEN_EVENTS[key] = None
+    if len(_SEEN_EVENTS) > _MAX_SEEN_EVENTS:
+        _SEEN_EVENTS.popitem(last=False)
+    return False
 
 
 def create_app(config: Config, store: TraceStore) -> tuple[AsyncApp, AsyncSocketModeHandler]:
@@ -54,8 +76,10 @@ def create_app(config: Config, store: TraceStore) -> tuple[AsyncApp, AsyncSocket
         channel = event.get("channel", "")
         if config.WATCH_CHANNELS and channel not in config.WATCH_CHANNELS:
             return
-        # Skip bot messages and retries
+        # Skip bot messages, edits, and Slack retries
         if event.get("bot_id") or event.get("subtype") in ("bot_message", "message_changed"):
+            return
+        if _is_duplicate(event):
             return
         user = event.get("user", "")
         text = event.get("text", "")

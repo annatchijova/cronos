@@ -139,3 +139,83 @@ class TestStoreQueries:
         ok, errors = store.chain.verify()
         assert ok is True
         assert errors == []
+
+
+class TestStoreEdgeCases:
+    def test_str_to_fraction_malformed_returns_none(self):
+        from cronos.store import _str_to_fraction
+        assert _str_to_fraction("abc/def") is None
+
+    def test_str_to_fraction_zero_denominator_returns_none(self):
+        from cronos.store import _str_to_fraction
+        assert _str_to_fraction("1/0") is None
+
+    def test_str_to_fraction_valid(self):
+        from cronos.store import _str_to_fraction
+        from fractions import Fraction
+        assert _str_to_fraction("74/100") == Fraction(74, 100)
+        assert _str_to_fraction("0/1") == Fraction(0)
+        assert _str_to_fraction(None) is None
+        assert _str_to_fraction("") is None
+
+    def test_trace_steps_cascade_on_new_db(self, store):
+        """New databases must have ON DELETE CASCADE on trace_steps.trace_id."""
+        fk_list = store._conn.execute(
+            "PRAGMA foreign_key_list(trace_steps)"
+        ).fetchall()
+        assert fk_list, "trace_steps must have at least one FK"
+        assert any(row[6] == "CASCADE" for row in fk_list), (
+            "trace_steps.trace_id FK must have ON DELETE CASCADE"
+        )
+
+    def test_migration_runs_on_legacy_db(self, tmp_path):
+        """TraceStore must migrate an existing DB that lacks ON DELETE CASCADE."""
+        import sqlite3
+        from cronos.store import TraceStore as TS
+
+        db_path = str(tmp_path / "legacy.db")
+        # Simulate a legacy DB: create trace_steps WITHOUT ON DELETE CASCADE
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("""
+            CREATE TABLE traces (
+                trace_id            TEXT PRIMARY KEY,
+                agent_id            TEXT NOT NULL,
+                channel_id          TEXT NOT NULL,
+                user_id             TEXT NOT NULL,
+                objective           TEXT NOT NULL,
+                decision            TEXT,
+                confidence          TEXT,
+                started_at          TEXT NOT NULL,
+                closed_at           TEXT,
+                entry_hash          TEXT,
+                chain_ok            INTEGER DEFAULT 0,
+                quality             TEXT,
+                diversity           TEXT,
+                contradictions      TEXT,
+                confidence_warnings TEXT,
+                cronos_version      TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE trace_steps (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id  TEXT NOT NULL REFERENCES traces(trace_id),
+                seq       INTEGER NOT NULL,
+                kind      TEXT NOT NULL,
+                payload   TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        # Open with TraceStore — migration must add CASCADE
+        store = TS(db_path)
+        fk_list = store._conn.execute(
+            "PRAGMA foreign_key_list(trace_steps)"
+        ).fetchall()
+        assert any(row[6] == "CASCADE" for row in fk_list), (
+            "Migration must add ON DELETE CASCADE to trace_steps"
+        )

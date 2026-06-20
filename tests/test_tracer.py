@@ -172,6 +172,31 @@ class TestTracerRecording:
         assert len(recalls) == 1
 
 
+class TestTracerValidation:
+    def test_decide_rejects_confidence_above_one(self, store):
+        with pytest.raises(ValueError, match=r"\[0, 1\]"):
+            with CronosTracer(store, "a1", "C1", "U1", "obj") as t:
+                t.decide("action", Fraction(3, 2))
+
+    def test_decide_rejects_negative_confidence(self, store):
+        with pytest.raises(ValueError, match=r"\[0, 1\]"):
+            with CronosTracer(store, "a1", "C1", "U1", "obj") as t:
+                t.decide("action", Fraction(-1, 10))
+
+    def test_decide_accepts_zero_and_one(self, store):
+        with CronosTracer(store, "a1", "C1", "U1", "obj") as t:
+            t.decide("nothing", Fraction(0))
+        with CronosTracer(store, "a1", "C1", "U1", "obj") as t:
+            t.add_evidence("certain", supports="h1")
+            t.decide("certain action", Fraction(1))
+        assert store.get_latest_trace() is not None
+
+    def test_add_evidence_rejects_both_supports_and_refutes(self, store):
+        with pytest.raises(ValueError, match="cannot both support and refute"):
+            with CronosTracer(store, "a1", "C1", "U1", "obj") as t:
+                t.add_evidence("ambiguous", supports="h1", refutes="h1")
+
+
 class TestTracerIds:
     def test_each_trace_has_unique_id(self, store):
         ids = set()

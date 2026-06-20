@@ -144,3 +144,45 @@ class TestComputeHash:
         h1 = _compute_entry_hash("ts", "t1", "aid", "obj", "dec", "74/100", "prev")
         h2 = _compute_entry_hash("ts", "t2", "aid", "obj", "dec", "74/100", "prev")
         assert h1 != h2
+
+    def test_compact_json_no_spaces(self):
+        """
+        Hash must be byte-identical to an independent implementation that also uses
+        compact JSON separators.  Any space in the serialized canonical dict would
+        silently break cross-implementation verification.
+        """
+        canonical = {
+            "agent_id":   "aid",
+            "confidence": "74/100",
+            "decision":   "dec",
+            "objective":  "obj",
+            "prev_hash":  "prev",
+            "timestamp":  "ts",
+            "trace_id":   "tid",
+        }
+        raw = (
+            json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+            + "prev"
+        ).encode("utf-8")
+        expected = hashlib.sha256(raw).hexdigest()
+        assert _compute_entry_hash("ts", "tid", "aid", "obj", "dec", "74/100", "prev") == expected
+
+    def test_hash_differs_from_spaced_json(self):
+        """Verify that the old (spaced) serialization would give a DIFFERENT hash."""
+        canonical = {
+            "agent_id":   "aid",
+            "confidence": "74/100",
+            "decision":   "dec",
+            "objective":  "obj",
+            "prev_hash":  "prev",
+            "timestamp":  "ts",
+            "trace_id":   "tid",
+        }
+        # Old format had default separators (with spaces)
+        raw_spaced = (
+            json.dumps(canonical, sort_keys=True, ensure_ascii=False)
+            + "prev"
+        ).encode("utf-8")
+        spaced_hash = hashlib.sha256(raw_spaced).hexdigest()
+        actual = _compute_entry_hash("ts", "tid", "aid", "obj", "dec", "74/100", "prev")
+        assert actual != spaced_hash

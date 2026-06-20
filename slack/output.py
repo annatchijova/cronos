@@ -14,17 +14,34 @@ from typing import Optional
 from cronos.narrator import Narrator
 from cronos.models import Trace
 
+# Slack Block Kit limits
+_SLACK_MAX_BLOCKS    = 50
+_SLACK_MAX_TEXT_CHARS = 3000
+
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _escape(text: str) -> str:
-    """Escape Slack mrkdwn special characters in user-supplied text."""
+    """
+    Escape Slack mrkdwn special characters in user-supplied text.
+
+    Slack's mrkdwn parser requires &, <, > to be encoded as HTML entities.
+    Slack renders &amp; → &, &lt; → <, &gt; → > on the client side, so
+    this does NOT produce ugly literal entity strings for the user.
+    """
     return (
         text
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+def _trunc(text: str, max_len: int = _SLACK_MAX_TEXT_CHARS) -> str:
+    """Hard-truncate a text field to stay within Slack's per-block character limit."""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
 
 
 def _chain_badge(chain_ok: bool, hash_short: str) -> str:
@@ -218,7 +235,7 @@ def format_trace_explain(trace: Trace) -> list[dict]:
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": f"*In plain language:*\n_{_escape(prose)}_",
+            "text": _trunc(f"*In plain language:*\n_{_escape(prose)}_"),
         },
     })
 
@@ -279,6 +296,16 @@ def format_trace_explain(trace: Trace) -> list[dict]:
             }
         ],
     })
+
+    # Slack hard limit: 50 blocks per message.  Truncate gracefully.
+    if len(blocks) > _SLACK_MAX_BLOCKS:
+        blocks = blocks[: _SLACK_MAX_BLOCKS - 1]
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn",
+                          "text": "_⚠️ Output truncated — trace too large for a single message. "
+                                  "Use `/cronos audit` to export the full record._"}],
+        })
 
     return blocks
 

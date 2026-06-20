@@ -4,8 +4,11 @@ validate_credentials() is separated from __init__ so tests can
 instantiate Config() without real Slack tokens.
 """
 
+import logging
 import os
 from dataclasses import dataclass, field
+
+_log = logging.getLogger("cronos.config")
 
 
 @dataclass
@@ -25,7 +28,19 @@ class Config:
         self.CRONOS_DB_PATH       = os.environ.get("CRONOS_DB_PATH",        "cronos.db")
         self.LOG_LEVEL            = os.environ.get("LOG_LEVEL",             "INFO")
         raw = os.environ.get("CRONOS_WATCH_CHANNELS", "")
-        self.WATCH_CHANNELS = [c.strip().lstrip("#") for c in raw.split(",") if c.strip()]
+        parsed = [c.strip().lstrip("#") for c in raw.split(",") if c.strip()]
+        # Slack channel IDs start with C or G followed by uppercase alphanumerics.
+        # Names (e.g. "general") will never match the event channel ID from Slack.
+        # Warn loudly so operators don't spend time debugging a silent no-op filter.
+        for ch in parsed:
+            if ch and not (len(ch) >= 9 and ch[0] in "CGD" and ch.isalnum()):
+                _log.warning(
+                    "CRONOS_WATCH_CHANNELS: %r looks like a channel name, not an ID. "
+                    "Slack events carry channel IDs (e.g. C0123456789). "
+                    "This filter will never match — use the channel ID instead.",
+                    ch,
+                )
+        self.WATCH_CHANNELS = parsed
 
     def validate_credentials(self) -> None:
         """
