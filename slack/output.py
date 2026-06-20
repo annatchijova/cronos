@@ -33,6 +33,16 @@ def _chain_badge(chain_ok: bool, hash_short: str) -> str:
     return f"❌ Chain verification failed · `{hash_short}`"
 
 
+def _quality_badge(quality: str) -> str:
+    badges = {
+        "FULL":    "🟢 FULL",
+        "PARTIAL": "🟡 PARTIAL",
+        "MINIMAL": "🟠 MINIMAL",
+        "EMPTY":   "🔴 EMPTY",
+    }
+    return badges.get(quality, f"— {quality}")
+
+
 def _confidence_bar(pct_str: str, width: int = 10) -> str:
     """Render a text progress bar for confidence. '74%' → '[███████░░░]'."""
     try:
@@ -58,9 +68,23 @@ def format_trace_card(trace: Trace) -> list[dict]:
         f"{sym} {_escape(line)}" for sym, line in s["why_lines"]
     ) or "_No reasoning steps recorded._"
 
-    conf_pct   = s["confidence_pct"]
-    conf_bar   = _confidence_bar(conf_pct)
-    chain_line = _chain_badge(s["chain_ok"], s["hash_short"])
+    conf_pct    = s["confidence_pct"]
+    conf_bar    = _confidence_bar(conf_pct)
+    chain_line  = _chain_badge(s["chain_ok"], s["hash_short"])
+    quality_bdg = _quality_badge(s.get("quality", ""))
+    div_pct     = s.get("diversity_pct", "—")
+
+    # Contradiction warning line (if any)
+    contradictions = s.get("contradictions", [])
+    contra_line = ""
+    if contradictions:
+        contra_line = f"\n⚠️ *{len(contradictions)} contradiction(s) detected* — run `/cronos explain` for details"
+
+    # Confidence clamping warning
+    conf_warnings = s.get("confidence_warnings", [])
+    conf_warn_line = ""
+    if conf_warnings:
+        conf_warn_line = f"\n_ℹ️ Confidence adjusted: {'; '.join(conf_warnings[:1])}_"
 
     return [
         {"type": "divider"},
@@ -69,7 +93,7 @@ def format_trace_card(trace: Trace) -> list[dict]:
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f"*🔭 CRONOS TRACE* · `{s['agent_id']}`\n"
+                    f"*⬡ CRONOS TRACE* · `{s['agent_id']}`\n"
                     f"*Decision:* {decision_text}"
                 ),
             },
@@ -78,7 +102,7 @@ def format_trace_card(trace: Trace) -> list[dict]:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Why?*\n{why_text}",
+                "text": f"*Why?*\n{why_text}{contra_line}{conf_warn_line}",
             },
         },
         {
@@ -88,6 +112,7 @@ def format_trace_card(trace: Trace) -> list[dict]:
                     "type": "mrkdwn",
                     "text": (
                         f"*Confidence:* {conf_bar} {conf_pct}   |   "
+                        f"Quality: {quality_bdg} ({div_pct} diversity)   |   "
                         f"{chain_line}   |   "
                         f"`/cronos explain {s['trace_id'][:8]}`"
                     ),
@@ -195,6 +220,49 @@ def format_trace_explain(trace: Trace) -> list[dict]:
             "type": "mrkdwn",
             "text": f"*In plain language:*\n_{_escape(prose)}_",
         },
+    })
+
+    # Devil's advocate (from VIGÍA devil_advocate_gen)
+    da = f.get("devils_advocate", "")
+    if da and da != "No alternative hypotheses were generated.":
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Devil's advocate:*\n_{_escape(da)}_",
+            },
+        })
+
+    # Contradiction warnings (from VIGÍA self-correction loop)
+    contradictions = f.get("contradictions", [])
+    if contradictions:
+        ct_lines = "\n".join(f"⚠️ {_escape(c)}" for c in contradictions)
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Contradictions detected:*\n{ct_lines}",
+            },
+        })
+
+    # Confidence warnings (ceiling/floor clamping)
+    conf_warnings = f.get("confidence_warnings", [])
+    if conf_warnings:
+        cw_lines = "\n".join(f"ℹ️ {_escape(w)}" for w in conf_warnings)
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Confidence constraints applied:*\n{cw_lines}"},
+        })
+
+    # Quality + diversity + version (from VIGÍA acquisition assurance + config_sentinel)
+    quality_line = (
+        f"Quality: {_quality_badge(f.get('quality',''))} · "
+        f"Diversity: {f.get('diversity_pct','—')} · "
+        f"CRONOS v{f.get('cronos_version','—')}"
+    )
+    blocks.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": quality_line}],
     })
 
     # Footer

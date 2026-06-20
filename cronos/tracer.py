@@ -5,7 +5,13 @@ Context-manager SDK for instrumenting agent decision cycles.
 The tracer records steps *while* the agent runs — not as a post-hoc
 rationalization. Every recall, tool call, hypothesis, discard, and piece
 of evidence is timestamped as it happens. When the context exits, the
-full trace is sealed with a SHA-256 chain entry and written atomically.
+full trace is sealed with quality metrics applied, then written atomically.
+
+VIGÍA ideas integrated here:
+  - Version sentinel: cronos_version recorded in OBJECTIVE step payload
+  - Negation detection: add_evidence() auto-tags negation context
+  - Confidence ceiling + floor: apply_confidence_constraints() in decide()
+  - Quality / diversity / contradiction: computed on __exit__ before save
 
 Usage
 -----
@@ -19,17 +25,13 @@ Usage
                       objective="Resolve ticket #842") as t:
 
         t.record_recall("M-22",  "Auth timeout in service A", score=Fraction(91, 100))
-        t.record_recall("M-81",  "Failed login cascade",      score=Fraction(74, 100))
         t.call_tool("jira",   "ticket #842 → Open / Auth / High")
-        t.call_tool("github", "2 commits in auth-service match pattern")
-        t.add_hypothesis("auth_bug",   "Authentication token expired")
-        t.add_hypothesis("cache_bug",  "Cache invalidation failure")
-        t.add_evidence("Jira confirms Auth category",          supports="auth_bug")
-        t.add_evidence("No cache errors in Jira log",         refutes="cache_bug")
+        t.add_hypothesis("auth_bug",  "Authentication token expired")
+        t.add_hypothesis("cache_bug", "Cache invalidation failure")
+        t.add_evidence("Jira confirms Auth category",  supports="auth_bug")
+        t.add_evidence("No cache errors in Jira log",  refutes="cache_bug")
         t.discard_hypothesis("cache_bug", "No cache errors in Jira log")
         t.decide("Apply auth token reset", confidence=Fraction(74, 100))
-
-The trace is accessible via store.get_latest_trace() and via /cronos explain.
 """
 
 from datetime import datetime, timezone
@@ -38,6 +40,14 @@ from typing import Optional
 from uuid import uuid4
 
 from .models import Trace, TraceStep, StepKind
+from .quality import (
+    CRONOS_VERSION,
+    apply_confidence_constraints,
+    compute_quality,
+    diversity_score,
+    detect_negation,
+    find_contradictions,
+)
 from .store import TraceStore
 
 
@@ -49,7 +59,8 @@ class CronosTracer:
     """
     Records the decision trace of a single agent action cycle.
     Must be used as a context manager.
-    The trace is sealed and stored atomically on __exit__.
+    On __exit__: quality metrics are computed, confidence is constrained,
+    and the trace is sealed + stored atomically.
     """
 
     def __init__(
@@ -68,11 +79,16 @@ class CronosTracer:
             user_id=user_id,
             objective=objective,
             started_at=_now(),
+            cronos_version=CRONOS_VERSION,  # 8. version sentinel
         )
-        # Objective is always the first step — recorded immediately
+        # OBJECTIVE is always the first step.
+        # Payload includes cronos_version for future audit reproducibility.
         self.trace.steps.append(TraceStep(
             kind=StepKind.OBJECTIVE,
-            payload={"objective": objective},
+            payload={
+                "objective":      objective,
+                "cronos_version": CRONOS_VERSION,   # 8. version sentinel
+            },
             timestamp=self.trace.started_at,
         ))
 
@@ -84,10 +100,35 @@ class CronosTracer:
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         self.trace.closed_at = _now()
         self.trace.closed = True
+
         if not self.trace.decision:
-            # Implicit "no decision" if the context exited without decide()
             self.trace.decision = "(no decision recorded)"
             self.trace.confidence = Fraction(0)
+
+        # ── Compute quality metrics before saving ──────────────────────────
+        steps = self.trace.steps
+
+        # 7. Trace quality level
+        self.trace.quality    = compute_quality(steps)
+        # 1. Observational diversity score
+        self.trace.diversity  = diversity_score(steps)
+        # 5. Contradiction detection
+        self.trace.contradictions = find_contradictions(steps)
+        # 2 & 3. Confidence ceiling + floor
+        if self.trace.confidence is not None:
+            adj, warnings = apply_confidence_constraints(self.trace.confidence, steps)
+            self.trace.confidence          = adj
+            self.trace.confidence_warnings = warnings
+            # Back-patch the DECISION step payload if confidence was adjusted
+            for step in reversed(steps):
+                if step.kind == StepKind.DECISION:
+                    step.payload["confidence"] = (
+                        f"{adj.numerator}/{adj.denominator}"
+                    )
+                    if warnings:
+                        step.payload["confidence_warnings"] = warnings
+                    break
+
         self._store.save_trace(self.trace)
         return False  # never suppress exceptions
 
@@ -138,6 +179,11 @@ class CronosTracer:
         """
         Record a piece of evidence.
 
+        6. Negation context detection (from VIGÍA negation_handler):
+           If the text contains negation words, payload["negation_detected"] = True
+           is set automatically. This marks the evidence as attenuating context
+           rather than positive confirmation.
+
         Parameters
         ----------
         text:     human-readable fact
@@ -149,25 +195,34 @@ class CronosTracer:
             payload["supports"] = supports
         if refutes:
             payload["refutes"] = refutes
+        # 6. Negation context auto-detection
+        if detect_negation(text):
+            payload["negation_detected"] = True
         self.trace.steps.append(TraceStep(StepKind.EVIDENCE, payload, _now()))
 
     def decide(self, decision: str, confidence: Fraction) -> None:
         """
-        Record the final decision and confidence score.
+        Record the final decision and raw confidence score.
         confidence must be a fractions.Fraction in [0, 1].
+
+        Note: the final stored confidence may differ from the value passed here
+        if the confidence ceiling (diversity-based) or floor (evidence-based)
+        requires clamping. See quality.apply_confidence_constraints().
+        The DECISION step payload records the adjusted value and any warnings.
         """
         if not isinstance(confidence, Fraction):
             raise TypeError(
                 "confidence must be fractions.Fraction — "
                 f"got {type(confidence).__name__}. CRONOS uses no floats."
             )
-        self.trace.decision = decision
+        self.trace.decision   = decision
         self.trace.confidence = confidence
         self.trace.steps.append(TraceStep(
             StepKind.DECISION,
             {
                 "decision":   decision,
                 "confidence": f"{confidence.numerator}/{confidence.denominator}",
+                "raw":        True,  # will be updated in __exit__ if adjusted
             },
             _now(),
         ))

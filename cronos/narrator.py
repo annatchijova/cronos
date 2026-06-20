@@ -16,7 +16,8 @@ All synthesis is deterministic rule-based NLG from structured step data.
 from fractions import Fraction
 from typing import Optional
 
-from .models import Trace, StepKind
+from .models import Trace, StepKind, TraceQuality
+from .quality import devils_advocate as _devils_advocate
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -117,16 +118,34 @@ class Narrator:
 
         hash_short = (self.trace.entry_hash or "")[:7] or "pending"
 
+        # Quality level badge
+        quality = self.trace.quality
+        quality_label = quality.value if quality else "UNKNOWN"
+
+        # Confidence warnings (ceiling/floor clamping)
+        conf_warnings = self.trace.confidence_warnings or []
+
+        # Contradictions detected
+        contradictions = self.trace.contradictions or []
+
         return {
-            "decision":          self.trace.decision or "(no decision)",
-            "why_lines":         why,
-            "confidence_pct":    _confidence_pct(self.trace.confidence),
-            "confidence_label":  _confidence_label(self.trace.confidence),
-            "hash_short":        hash_short,
-            "chain_ok":          self.trace.chain_ok,
-            "agent_id":          self.trace.agent_id,
-            "trace_id":          self.trace.trace_id,
-            "objective":         self.trace.objective,
+            "decision":             self.trace.decision or "(no decision)",
+            "why_lines":            why,
+            "confidence_pct":       _confidence_pct(self.trace.confidence),
+            "confidence_label":     _confidence_label(self.trace.confidence),
+            "hash_short":           hash_short,
+            "chain_ok":             self.trace.chain_ok,
+            "agent_id":             self.trace.agent_id,
+            "trace_id":             self.trace.trace_id,
+            "objective":            self.trace.objective,
+            "quality":              quality_label,
+            "diversity_pct":        (
+                f"{round(float(self.trace.diversity) * 100)}%"
+                if self.trace.diversity is not None else "—"
+            ),
+            "confidence_warnings":  conf_warnings,
+            "contradictions":       contradictions,
+            "cronos_version":       self.trace.cronos_version or "—",
         }
 
     # ── Full breakdown ─────────────────────────────────────────────────────────
@@ -179,16 +198,29 @@ class Narrator:
             for e in self._evidence
         ]
 
+        # 4. Devil's advocate synthesis
+        da = _devils_advocate(self.trace.steps, self.trace.decision or "")
+
         return {
             **short,
-            "memories":    memories,
-            "tools":       tools,
-            "hypotheses":  hypotheses,
-            "evidence":    evidence,
-            "started_at":  self.trace.started_at,
-            "closed_at":   self.trace.closed_at,
-            "entry_hash":  self.trace.entry_hash,
+            "memories":          memories,
+            "tools":             tools,
+            "hypotheses":        hypotheses,
+            "evidence":          evidence,
+            "started_at":        self.trace.started_at,
+            "closed_at":         self.trace.closed_at,
+            "entry_hash":        self.trace.entry_hash,
+            "devils_advocate":   da,
         }
+
+    # ── Devil's advocate ──────────────────────────────────────────────────────
+
+    def devils_advocate(self) -> str:
+        """
+        Synthesize the strongest alternative explanation (from VIGÍA devil_advocate_gen).
+        Returns a prose string suitable for display alongside the main decision.
+        """
+        return _devils_advocate(self.trace.steps, self.trace.decision or "")
 
     # ── Natural language prose ─────────────────────────────────────────────────
 

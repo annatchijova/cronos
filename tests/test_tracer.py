@@ -109,13 +109,18 @@ class TestTracerRecording:
         assert evs[0].payload["refutes"] == "h2"
 
     def test_decide_records_fraction(self, store):
+        # Full-diversity trace so the ceiling (quality.py) doesn't clamp the value.
         with CronosTracer(store, "a1", "C1", "U1", "obj") as t:
+            t.record_recall("M-1", "memory")
+            t.call_tool("jira", "result")
+            t.add_evidence("fact", supports="h1")
             t.decide("Apply fix", Fraction(74, 100))
         trace = store.get_latest_trace()
         assert trace.decision == "Apply fix"
+        # Full diversity → ceiling = 1, no clamping
         assert trace.confidence == Fraction(74, 100)
+        assert trace.confidence_warnings == []
         decisions = [s for s in trace.steps if s.kind == StepKind.DECISION]
-        # Fraction(74,100) auto-reduces to 37/50; both represent the same value
         conf_str = decisions[0].payload["confidence"]
         p, q = conf_str.split("/")
         assert Fraction(int(p), int(q)) == Fraction(74, 100)

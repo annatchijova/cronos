@@ -8,6 +8,22 @@ from fractions import Fraction
 from typing import Optional
 
 
+# TraceQuality is defined here (not in quality.py) to avoid circular imports.
+class TraceQuality(str, Enum):
+    """
+    Observational completeness of a trace.
+    Adapted from VIGÍA's acquisition assurance gating.
+    FULL    — RECALL + TOOL + (HYPOTHESIS or EVIDENCE) present
+    PARTIAL — two of the three observation groups present
+    MINIMAL — only one observation group
+    EMPTY   — no observations (only OBJECTIVE and/or DECISION)
+    """
+    FULL    = "FULL"
+    PARTIAL = "PARTIAL"
+    MINIMAL = "MINIMAL"
+    EMPTY   = "EMPTY"
+
+
 class StepKind(str, Enum):
     OBJECTIVE  = "objective"   # what the agent was asked to do
     RECALL     = "recall"      # memory retrieved from episodic store
@@ -40,3 +56,9 @@ class Trace:
     entry_hash: Optional[str] = None         # SHA-256 from the chain
     chain_ok: bool = False                   # chain integrity at close time
     closed: bool = False
+    # ── Quality / epistemics (ideas from VIGÍA) ──────────────────────────────
+    quality: Optional[TraceQuality] = None           # observational completeness
+    diversity: Optional[Fraction] = None             # Fraction(groups, 3) — 0/3 to 3/3
+    contradictions: list[str] = field(default_factory=list)  # detected contradictions
+    confidence_warnings: list[str] = field(default_factory=list)  # ceiling/floor clamping
+    cronos_version: str = "0.1.0"                    # version sentinel (config_sentinel)

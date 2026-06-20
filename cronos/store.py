@@ -10,7 +10,7 @@ from fractions import Fraction
 from typing import Optional
 
 from .chain import TraceChain
-from .models import Trace, TraceStep, StepKind
+from .models import Trace, TraceStep, StepKind, TraceQuality
 
 
 def _fraction_to_str(f: Optional[Fraction]) -> str:
@@ -44,17 +44,22 @@ class TraceStore:
     def _ensure_tables(self) -> None:
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS traces (
-                trace_id    TEXT PRIMARY KEY,
-                agent_id    TEXT NOT NULL,
-                channel_id  TEXT NOT NULL,
-                user_id     TEXT NOT NULL,
-                objective   TEXT NOT NULL,
-                decision    TEXT,
-                confidence  TEXT,
-                started_at  TEXT NOT NULL,
-                closed_at   TEXT,
-                entry_hash  TEXT,
-                chain_ok    INTEGER DEFAULT 0
+                trace_id            TEXT PRIMARY KEY,
+                agent_id            TEXT NOT NULL,
+                channel_id          TEXT NOT NULL,
+                user_id             TEXT NOT NULL,
+                objective           TEXT NOT NULL,
+                decision            TEXT,
+                confidence          TEXT,
+                started_at          TEXT NOT NULL,
+                closed_at           TEXT,
+                entry_hash          TEXT,
+                chain_ok            INTEGER DEFAULT 0,
+                quality             TEXT,
+                diversity           TEXT,
+                contradictions      TEXT,
+                confidence_warnings TEXT,
+                cronos_version      TEXT
             );
 
             CREATE TABLE IF NOT EXISTS trace_steps (
@@ -99,12 +104,19 @@ class TraceStore:
         self._conn.execute("""
             INSERT OR REPLACE INTO traces
                 (trace_id, agent_id, channel_id, user_id, objective,
-                 decision, confidence, started_at, closed_at, entry_hash, chain_ok)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                 decision, confidence, started_at, closed_at, entry_hash, chain_ok,
+                 quality, diversity, contradictions, confidence_warnings, cronos_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
         """, (
             trace.trace_id, trace.agent_id, trace.channel_id, trace.user_id,
             trace.objective, decision, conf_str,
             trace.started_at, trace.closed_at, entry_hash,
+            trace.quality.value if trace.quality else None,
+            (f"{trace.diversity.numerator}/{trace.diversity.denominator}"
+             if trace.diversity is not None else None),
+            json.dumps(trace.contradictions or [], ensure_ascii=False),
+            json.dumps(trace.confidence_warnings or [], ensure_ascii=False),
+            trace.cronos_version or None,
         ))
 
         for seq, step in enumerate(trace.steps):
@@ -123,7 +135,8 @@ class TraceStore:
         """Load a full Trace including all steps."""
         row = self._conn.execute(
             """SELECT trace_id, agent_id, channel_id, user_id, objective,
-                      decision, confidence, started_at, closed_at, entry_hash, chain_ok
+                      decision, confidence, started_at, closed_at, entry_hash, chain_ok,
+                      quality, diversity, contradictions, confidence_warnings, cronos_version
                FROM traces WHERE trace_id = ?""",
             (trace_id,),
         ).fetchone()
@@ -131,7 +144,9 @@ class TraceStore:
             return None
 
         (tid, agent_id, channel_id, user_id, objective,
-         decision, confidence, started_at, closed_at, entry_hash, chain_ok) = row
+         decision, confidence, started_at, closed_at, entry_hash, chain_ok,
+         quality_str, diversity_str, contradictions_json,
+         conf_warnings_json, cronos_version) = row
 
         step_rows = self._conn.execute(
             "SELECT kind, payload, timestamp FROM trace_steps "
@@ -148,6 +163,11 @@ class TraceStore:
             for r in step_rows
         ]
 
+        quality = TraceQuality(quality_str) if quality_str else None
+        diversity = _str_to_fraction(diversity_str)
+        contradictions = json.loads(contradictions_json) if contradictions_json else []
+        conf_warnings = json.loads(conf_warnings_json) if conf_warnings_json else []
+
         return Trace(
             trace_id=tid,
             agent_id=agent_id,
@@ -162,6 +182,11 @@ class TraceStore:
             entry_hash=entry_hash,
             chain_ok=bool(chain_ok),
             closed=True,
+            quality=quality,
+            diversity=diversity,
+            contradictions=contradictions,
+            confidence_warnings=conf_warnings,
+            cronos_version=cronos_version or "",
         )
 
     def get_latest_trace(
