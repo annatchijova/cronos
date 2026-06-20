@@ -133,43 +133,48 @@ class TraceStore:
         conf_str = _fraction_to_str(trace.confidence)
         decision  = trace.decision or ""
 
-        # Chain append — no commit, caller (us) owns the transaction
-        entry_hash = self.chain.append(
-            trace.trace_id, trace.agent_id,
-            trace.objective, decision, conf_str,
-        )
-        trace.entry_hash = entry_hash
-        trace.chain_ok   = True
+        try:
+            # Chain append — no commit, we own the transaction
+            entry_hash = self.chain.append(
+                trace.trace_id, trace.agent_id,
+                trace.objective, decision, conf_str,
+            )
+            trace.entry_hash = entry_hash
+            trace.chain_ok   = True
 
-        self._conn.execute("""
-            INSERT OR REPLACE INTO traces
-                (trace_id, agent_id, channel_id, user_id, objective,
-                 decision, confidence, started_at, closed_at, entry_hash, chain_ok,
-                 quality, diversity, contradictions, confidence_warnings, cronos_version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-        """, (
-            trace.trace_id, trace.agent_id, trace.channel_id, trace.user_id,
-            trace.objective, decision, conf_str,
-            trace.started_at, trace.closed_at, entry_hash,
-            trace.quality.value if trace.quality else None,
-            (f"{trace.diversity.numerator}/{trace.diversity.denominator}"
-             if trace.diversity is not None else None),
-            json.dumps(trace.contradictions or [], ensure_ascii=False),
-            json.dumps(trace.confidence_warnings or [], ensure_ascii=False),
-            trace.cronos_version or None,
-        ))
-
-        for seq, step in enumerate(trace.steps):
             self._conn.execute("""
-                INSERT INTO trace_steps (trace_id, seq, kind, payload, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO traces
+                    (trace_id, agent_id, channel_id, user_id, objective,
+                     decision, confidence, started_at, closed_at, entry_hash, chain_ok,
+                     quality, diversity, contradictions, confidence_warnings, cronos_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
             """, (
-                trace.trace_id, seq, step.kind.value,
-                json.dumps(step.payload, ensure_ascii=False, sort_keys=True),
-                step.timestamp,
+                trace.trace_id, trace.agent_id, trace.channel_id, trace.user_id,
+                trace.objective, decision, conf_str,
+                trace.started_at, trace.closed_at, entry_hash,
+                trace.quality.value if trace.quality else None,
+                (f"{trace.diversity.numerator}/{trace.diversity.denominator}"
+                 if trace.diversity is not None else None),
+                json.dumps(trace.contradictions or [], ensure_ascii=False),
+                json.dumps(trace.confidence_warnings or [], ensure_ascii=False),
+                trace.cronos_version or None,
             ))
 
-        self._conn.commit()  # single commit: chain + header + steps
+            for seq, step in enumerate(trace.steps):
+                self._conn.execute("""
+                    INSERT INTO trace_steps (trace_id, seq, kind, payload, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    trace.trace_id, seq, step.kind.value,
+                    json.dumps(step.payload, ensure_ascii=False, sort_keys=True),
+                    step.timestamp,
+                ))
+
+            self._conn.commit()  # single commit: chain + header + steps
+
+        except Exception:
+            self._conn.rollback()  # no partial traces — all or nothing
+            raise
 
     def load_trace(self, trace_id: str) -> Optional[Trace]:
         """Load a full Trace including all steps."""

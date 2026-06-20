@@ -25,7 +25,8 @@ from .quality import devils_advocate as _devils_advocate
 def _confidence_pct(f: Optional[Fraction]) -> str:
     if f is None:
         return "unknown"
-    return f"{round(float(f) * 100)}%"
+    # Multiply by 100 in Fraction space, then round to int — zero floats.
+    return f"{round(f * 100)}%"
 
 
 def _confidence_label(f: Optional[Fraction]) -> str:
