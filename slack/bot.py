@@ -27,9 +27,14 @@ _MAX_SEEN_EVENTS = 500
 
 def _is_duplicate(event: dict) -> bool:
     """Return True and skip if this event was already processed."""
-    key = f"{event.get('client_msg_id', '')}-{event.get('ts', '')}"
-    if not key or key == "-":
-        return False  # no usable key — let it through
+    # client_msg_id is absent on some Slack event subtypes (e.g. bot messages,
+    # file shares).  Fall back to ts alone — it is unique per channel per message.
+    # Use a sentinel prefix so "None-ts" and "-ts" cannot collide.
+    msg_id = event.get("client_msg_id") or ""
+    ts     = event.get("ts") or ""
+    if not ts:
+        return False  # no timestamp — cannot deduplicate safely, let it through
+    key = f"mid:{msg_id}|ts:{ts}"
     if key in _SEEN_EVENTS:
         log.debug("Duplicate event skipped: %s", key)
         return True

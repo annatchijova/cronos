@@ -63,28 +63,35 @@ def register_commands(app: AsyncApp, store: TraceStore) -> None:
 
 async def _handle_explain(respond, store: TraceStore, arg: str) -> None:
     """Explain a specific trace (by prefix) or the most recent one."""
-    trace = None
+    try:
+        trace = None
 
-    if arg:
-        # Prefix match — find the first trace whose ID starts with arg
-        recent = store.get_recent_traces(limit=100)
-        match = next(
-            (r for r in recent if r["trace_id"].startswith(arg)),
-            None,
-        )
-        if match:
-            trace = store.load_trace(match["trace_id"])
+        if arg:
+            # Prefix match — find the first trace whose ID starts with arg
+            recent = store.get_recent_traces(limit=100)
+            match = next(
+                (r for r in recent if r["trace_id"].startswith(arg)),
+                None,
+            )
+            if match:
+                trace = store.load_trace(match["trace_id"])
+            if not trace:
+                await respond(text=f"No trace found matching prefix `{arg}`.")
+                return
+        else:
+            trace = store.get_latest_trace()
+
         if not trace:
-            await respond(text=f"No trace found matching prefix `{arg}`.")
+            await respond(text="_No traces recorded yet. Run an agent to generate one._")
             return
-    else:
-        trace = store.get_latest_trace()
 
-    if not trace:
-        await respond(text="_No traces recorded yet. Run an agent to generate one._")
-        return
+        await respond(blocks=format_trace_explain(trace), text="CRONOS trace explanation")
 
-    await respond(blocks=format_trace_explain(trace), text="CRONOS trace explanation")
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Error in /cronos explain: %s", exc)
+        await respond(
+            text=f"⚠️ Failed to load trace: `{exc}`. Check logs for details."
+        )
 
 
 # ── /cronos trace ─────────────────────────────────────────────────────────────

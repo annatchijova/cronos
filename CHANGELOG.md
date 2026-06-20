@@ -26,3 +26,33 @@ Initial implementation of CRONOS, built for the Slack Agent Builder Challenge.
 - `_escape()` applied to all user-supplied text in Block Kit payloads (XSS via Slack mrkdwn).
 - `CronosTracer.__exit__` stores the trace even when the agent code raises — the partial trace is forensically valuable.
 - `Fraction(74, 100)` auto-reduces to `37/50`; the store round-trips `p/q` string and reconstructs the exact Fraction — equality holds.
+
+---
+
+## [0.1.1] — 2026-06-20 — Post-audit hardening
+
+### Breaking change — SHA-256 chain serialization
+
+`_compute_entry_hash` now uses `json.dumps(..., separators=(',', ':'))` (compact,
+no spaces) instead of the default space-padded format.
+
+**Impact:** Any `entry_hash` produced by `0.1.0` will fail re-verification under
+`0.1.1` because the canonical JSON bytes differ.  This affects only audit chain
+verification (`/cronos audit`), not trace retrieval or display.
+
+**Migration:** If you have an existing `cronos.db` from `0.1.0`, delete it and
+start fresh, or export all traces before upgrading.  The old hashes are stored in
+`trace_chain.entry_hash` — a mismatch against a recomputed value indicates the
+version boundary, not tampering.
+
+### Fixes
+
+- **`chain.py`** — compact JSON separators for deterministic cross-implementation hashes
+- **`tracer.py`** — `__exit__` logs storage failures; `decide()` validates `[0,1]`; `add_evidence()` rejects `supports+refutes` simultaneously
+- **`store.py`** — `ON DELETE CASCADE` on `trace_steps`; auto-migration for legacy DBs; `_str_to_fraction` hardened
+- **`output.py`** — `_trunc()` helper; 50-block cap on `format_trace_explain`; `_escape` comment clarifies mrkdwn-vs-plain_text behavior
+- **`config.py`** — warns when channel names (not IDs) are used in `CRONOS_WATCH_CHANNELS`
+- **`main.py`** — SIGTERM/SIGINT handler for graceful async shutdown
+- **`bot.py`** — event deduplication with bounded LRU; `_is_duplicate` handles absent `client_msg_id`
+- **`demo/agent.py`** — trigger regex requires ticket/issue/bug context
+- **`commands.py`** — `_handle_explain` wraps all store calls in try/except with user-facing error message

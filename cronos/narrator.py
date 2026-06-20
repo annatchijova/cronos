@@ -31,14 +31,13 @@ def _confidence_pct(f: Optional[Fraction]) -> str:
 def _confidence_label(f: Optional[Fraction]) -> str:
     if f is None:
         return "unknown confidence"
-    pct = float(f)
-    if pct >= 0.85:
+    if f >= Fraction(85, 100):
         return "very high confidence"
-    if pct >= 0.70:
+    if f >= Fraction(70, 100):
         return "high confidence"
-    if pct >= 0.50:
+    if f >= Fraction(50, 100):
         return "moderate confidence"
-    if pct >= 0.30:
+    if f >= Fraction(30, 100):
         return "low confidence"
     return "very low confidence"
 

@@ -26,8 +26,12 @@ def _escape(text: str) -> str:
     Escape Slack mrkdwn special characters in user-supplied text.
 
     Slack's mrkdwn parser requires &, <, > to be encoded as HTML entities.
-    Slack renders &amp; → &, &lt; → <, &gt; → > on the client side, so
-    this does NOT produce ugly literal entity strings for the user.
+    In `"type": "mrkdwn"` fields, Slack decodes &amp; → &, &lt; → <, &gt; → >
+    before rendering, so end users see the original characters.
+
+    NOTE: do NOT apply _escape to `"type": "plain_text"` fields — plain_text
+    is displayed verbatim and HTML entities would appear literally (&amp;, etc.).
+    Every user-supplied string in this module goes into mrkdwn fields only.
     """
     return (
         text
