@@ -186,6 +186,18 @@ cronos/
 
 ---
 
+## Installation
+
+```bash
+git clone https://github.com/annatchijova/cronos.git
+cd cronos
+bash install.sh
+```
+
+`install.sh` creates a `.venv`, installs the package in editable mode with dev dependencies, and generates a `.env` template for your Slack credentials.
+
+---
+
 ## Setup
 
 ### 1. Create the Slack app
