@@ -22,7 +22,7 @@ import logging
 import re
 from fractions import Fraction
 
-from cronos import CronosTracer, TraceStore
+from cronos import CronosTracer, TraceStore, Trace
 from slack.output import format_trace_card
 
 log = logging.getLogger("cronos.demo")
@@ -143,6 +143,92 @@ _DECISIONS = {
 }
 
 
+# ── Shared decision cycle ──────────────────────────────────────────────────────
+
+def run_decision_cycle(
+    store: TraceStore,
+    text: str,
+    channel_id: str = "C-DEMO",
+    user_id: str = "U-DEMO",
+    agent_id: str = "support-resolver",
+) -> tuple[Trace, str]:
+    """
+    Run one complete, CRONOS-instrumented decision cycle for a support ticket
+    and return the sealed trace plus the decision text.
+
+    This is the deterministic core shared by the Slack agent (DemoAgent) and the
+    standalone CLI demo (run_demo.py). It performs no Slack I/O, so it runs fully
+    offline and reproducibly — same input always produces the same trace.
+    """
+    m = re.search(r"ticket\s*#?(\d+)", text, re.IGNORECASE)
+    ticket_num = int(m.group(1)) if m else 0
+
+    objective = (
+        f"Resolve ticket #{ticket_num}" if ticket_num
+        else f"Resolve reported issue: {text[:60]}"
+    )
+
+    with CronosTracer(
+        store=store,
+        agent_id=agent_id,
+        channel_id=channel_id,
+        user_id=user_id,
+        objective=objective,
+    ) as t:
+
+        # Step 1 — Recall memories
+        memories = _recall_memories(text)
+        for mem in memories:
+            t.record_recall(mem["id"], mem["summary"], score=mem["confidence"])
+
+        # Step 2 — Call Jira
+        category, priority, status = _mock_jira(ticket_num, text)
+        t.call_tool(
+            "jira",
+            f"ticket #{ticket_num} → {status} / {category} / {priority}",
+        )
+
+        # Step 3 — Call GitHub
+        github_result = _mock_github(ticket_num, category)
+        t.call_tool("github", github_result)
+
+        # Step 4 — Generate hypotheses
+        hyps = _HYPOTHESES.get(category, _HYPOTHESES["General"])
+        primary, secondary = hyps[0], hyps[1]
+        t.add_hypothesis(primary[0],   primary[1])
+        t.add_hypothesis(secondary[0], secondary[1])
+
+        # Step 5 — Evidence
+        t.add_evidence(
+            f"Jira categorized as {category} with {priority} priority",
+            supports=primary[0],
+        )
+        if memories:
+            t.add_evidence(
+                f"Memory {memories[0]['id']} matches: {memories[0]['summary'][:60]}",
+                supports=primary[0],
+            )
+        t.add_evidence(
+            f"No {secondary[0].replace('_',' ')} indicators found in Jira log",
+            refutes=secondary[0],
+        )
+
+        # Step 6 — Discard secondary hypothesis
+        t.discard_hypothesis(
+            secondary[0],
+            f"No {secondary[0].replace('_',' ')} indicators in Jira or GitHub",
+        )
+
+        # Step 7 — Decide
+        decision_text, confidence = _DECISIONS.get(category, _DECISIONS["General"])
+        t.decide(decision_text, confidence)
+
+        # The trace is sealed and stored when the `with` block exits.
+        trace = t.trace
+
+    return trace, decision_text
+
+
 # ── Demo Agent ────────────────────────────────────────────────────────────────
 
 class DemoAgent:
@@ -175,76 +261,15 @@ class DemoAgent:
         if not self._TRIGGER.search(text):
             return  # not for us
 
-        # Extract ticket number or use a default
-        m = re.search(r"ticket\s*#?(\d+)", text, re.IGNORECASE)
-        ticket_num = int(m.group(1)) if m else 0
+        log.info("DemoAgent triggered: channel=%s", channel_id)
 
-        log.info("DemoAgent triggered: channel=%s ticket=%s", channel_id, ticket_num)
-
-        # ── Open a CRONOS trace ───────────────────────────────────────────────
-        objective = (
-            f"Resolve ticket #{ticket_num}" if ticket_num
-            else f"Resolve reported issue: {text[:60]}"
-        )
-
-        with CronosTracer(
-            store=self._store,
-            agent_id="support-resolver",
+        # ── Run the instrumented decision cycle (shared with run_demo.py) ─────
+        trace, decision_text = run_decision_cycle(
+            self._store,
+            text,
             channel_id=channel_id,
             user_id=user_id,
-            objective=objective,
-        ) as t:
-
-            # Step 1 — Recall memories
-            memories = _recall_memories(text)
-            for mem in memories:
-                t.record_recall(mem["id"], mem["summary"], score=mem["confidence"])
-
-            # Step 2 — Call Jira
-            category, priority, status = _mock_jira(ticket_num, text)
-            t.call_tool(
-                "jira",
-                f"ticket #{ticket_num} → {status} / {category} / {priority}",
-            )
-
-            # Step 3 — Call GitHub
-            github_result = _mock_github(ticket_num, category)
-            t.call_tool("github", github_result)
-
-            # Step 4 — Generate hypotheses
-            hyps = _HYPOTHESES.get(category, _HYPOTHESES["General"])
-            primary, secondary = hyps[0], hyps[1]
-            t.add_hypothesis(primary[0],   primary[1])
-            t.add_hypothesis(secondary[0], secondary[1])
-
-            # Step 5 — Evidence
-            t.add_evidence(
-                f"Jira categorized as {category} with {priority} priority",
-                supports=primary[0],
-            )
-            if memories:
-                t.add_evidence(
-                    f"Memory {memories[0]['id']} matches: {memories[0]['summary'][:60]}",
-                    supports=primary[0],
-                )
-            t.add_evidence(
-                f"No {secondary[0].replace('_',' ')} indicators found in Jira log",
-                refutes=secondary[0],
-            )
-
-            # Step 6 — Discard secondary hypothesis
-            t.discard_hypothesis(
-                secondary[0],
-                f"No {secondary[0].replace('_',' ')} indicators in Jira or GitHub",
-            )
-
-            # Step 7 — Decide
-            decision_text, confidence = _DECISIONS.get(category, _DECISIONS["General"])
-            t.decide(decision_text, confidence)
-
-            # The trace is sealed and stored when the `with` block exits.
-            # Capture the trace object reference for the Slack reply.
-            trace = t.trace
+        )
 
         # ── Post the agent reply + CRONOS card ────────────────────────────────
         conf_pct = round(float(trace.confidence) * 100)

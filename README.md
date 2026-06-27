@@ -172,7 +172,8 @@ cronos/
 │   ├── commands.py     /cronos subcommand handlers
 │   └── output.py       Block Kit formatters
 ├── demo/
-│   └── agent.py        Demo support ticket resolver using the SDK
+│   ├── agent.py        Demo support ticket resolver using the SDK
+│   └── run_demo.py     Standalone CLI demo — no Slack, no tokens required
 ├── tests/
 │   ├── test_tracer.py   (28 tests)
 │   ├── test_chain.py    (15 tests)
@@ -183,6 +184,21 @@ cronos/
 ├── config.py           Environment config
 └── slack_manifest.yml  Import directly at api.slack.com/apps
 ```
+
+---
+
+## Try it in 10 seconds
+
+No Slack app, no tokens, no setup — the CLI demo runs the full Black Box Recorder
+against four support-ticket scenarios, prints each sealed trace, then **tampers
+with a stored trace and proves the SHA-256 chain catches it**:
+
+```bash
+python3 demo/run_demo.py        # from the repo root
+```
+
+The same decision cycle powers the Slack agent (`demo/agent.py`) and the
+interactive demo on the landing page (`index.html`).
 
 ---
 

@@ -130,7 +130,7 @@
   .trace-empty{padding:36px 20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted-2);gap:14px;min-height:300px}
   .scan-line{width:54px;height:2px;background:var(--indigo);box-shadow:0 0 12px var(--indigo);animation:scanh 2s ease-in-out infinite}
   @keyframes scanh{0%,100%{transform:scaleX(0.2);opacity:.4}50%{transform:scaleX(1);opacity:1}}
-  .trace-card{padding:18px;display:flex;flex-direction:column;gap:12px}
+  .trace-card{padding:18px;display:flex;flex-direction:column;gap:12px;width:100%;min-width:0}
   .tc-label{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted-2)}
   .tc-decision{font-family:var(--display);font-weight:700;font-size:16px;color:var(--text);margin-top:2px}
   .why-list{display:flex;flex-direction:column;gap:5px;margin-top:4px}
@@ -147,13 +147,29 @@
   .steps-section{margin-top:8px}
   .step-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;border:1px solid var(--line-soft);background:var(--bg-2);margin-bottom:4px;font-size:11px}
   .step-kind{min-width:80px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2)}
-  .step-detail{color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .step-detail{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .step-row.s-recall .step-kind{color:var(--indigo-soft)}
   .step-row.s-tool .step-kind{color:var(--cyan)}
   .step-row.s-hyp .step-kind{color:var(--amber)}
   .step-row.s-discard .step-kind{color:var(--red)}
   .step-row.s-evidence .step-kind{color:var(--green)}
   .step-row.s-decision .step-kind{color:var(--text)}
+
+  /* natural language prose */
+  .tc-prose{font-size:12px;color:var(--muted);line-height:1.65;background:var(--bg-2);border:1px solid var(--line-soft);border-radius:8px;padding:12px 14px}
+  .tc-prose em{color:var(--indigo-soft);font-style:normal}
+
+  /* tamper-evidence demo */
+  .tamper-btn{background:transparent;border:1px solid var(--line);color:var(--muted);font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:5px 9px;border-radius:6px;cursor:pointer;transition:.18s;white-space:nowrap}
+  .tamper-btn:hover{border-color:var(--amber);color:var(--amber)}
+  .hash-row{flex-wrap:wrap;transition:color .25s}
+  .hash-row.broken{color:var(--red)}
+  .hash-row.broken .hash-ok{color:var(--red)}
+  .hash-row.broken .tamper-btn{border-color:var(--green-glow)}
+  .hash-row.broken .tamper-btn:hover{border-color:var(--green);color:var(--green)}
+  .hash-row code{color:inherit}
+  .explain-hint{font-size:11px;color:var(--muted-2);margin-top:2px}
+  .forged{color:var(--red);text-decoration:line-through;text-decoration-color:rgba(240,82,82,.55)}
 
   /* COMPARISON */
   .comparison{display:grid;grid-template-columns:1fr 1fr;gap:22px}
@@ -245,7 +261,7 @@
       <div class="divider"></div>
       <span class="mono-label">Live simulation</span>
       <h2>Every decision, explained</h2>
-      <p>Load a preset scenario. CRONOS simulates the full decision cycle of a support ticket resolver and shows the complete trace — memories, tools, hypotheses, evidence, and natural language explanation.</p>
+      <p>Load a preset scenario. CRONOS simulates the full decision cycle of a support ticket resolver and shows the complete trace — memories, tools, hypotheses, evidence, and a plain-language explanation. Then <strong>tamper with the sealed trace</strong> and watch the SHA-256 chain catch it.</p>
     </div>
     <div class="demo-grid">
       <div class="panel">
@@ -450,6 +466,56 @@ function fakeHash() {
   return Array.from({length:7},()=>'0123456789abcdef'[Math.floor(Math.random()*16)]).join('');
 }
 
+/* ── Deterministic NL synthesis (mirrors cronos/narrator.py · natural()) ── */
+function confLabel(pct){
+  if(pct>=85) return 'very high confidence';
+  if(pct>=70) return 'high confidence';
+  if(pct>=50) return 'moderate confidence';
+  if(pct>=30) return 'low confidence';
+  return 'very low confidence';
+}
+function buildNatural(sc, mems){
+  const parts = [];
+  if(mems.length){
+    parts.push(`I retrieved ${mems.length} ${mems.length===1?'memory':'memories'} (${mems.map(m=>m.id).join(', ')})`);
+  }
+  parts.push(`jira returned: ${sc.jira}`);
+  parts.push(`github returned: ${sc.github}`);
+  parts.push(`evidence supported <em>${sc.hyps[0][0]}</em>: Jira confirms ${sc.cat} category`);
+  parts.push(`I discarded <em>${sc.discard}</em> because no ${sc.discard.replace('_',' ')} indicators in Jira or GitHub`);
+  return `Because ${parts.join('; ')} — I decided to <em>${sc.decision}</em> (${confLabel(sc.conf)}, ${sc.conf}%).`;
+}
+
+/* ── Tamper-evidence demo: break the sealed trace, then re-seal it ── */
+let CUR = null;       // { agent, hash, decision, prose } for the active trace
+let tampered = false;
+const FORGED = "Do nothing — close ticket as won't-fix";
+
+function toggleTamper(){
+  if(!CUR) return;
+  tampered = !tampered;
+  const row  = document.getElementById('hashRow');
+  const icon = document.getElementById('hashIcon');
+  const txt  = document.getElementById('hashText');
+  const btn  = document.getElementById('tamperBtn');
+  const dec  = document.getElementById('tcDecision');
+
+  if(tampered){
+    // Forge the decision after the fact — the on-disk hash is left untouched.
+    dec.innerHTML = `<span class="forged">${CUR.decision}</span> → <span style="color:var(--red)">${FORGED}</span>`;
+    row.classList.add('broken');
+    icon.textContent = '⛔';
+    txt.innerHTML = `Chain BROKEN · recomputed <code>${fakeHash()}</code> ≠ sealed <code>${CUR.hash}</code>`;
+    btn.textContent = '↺ Re-verify';
+  } else {
+    dec.textContent = CUR.decision;
+    row.classList.remove('broken');
+    icon.textContent = '✅';
+    txt.innerHTML = `Chain verified · <code>${CUR.hash}</code>`;
+    btn.textContent = '⚡ Tamper with trace';
+  }
+}
+
 function runTrace() {
   const btn = document.getElementById('runBtn');
   const txt = document.getElementById('runTxt');
@@ -498,13 +564,18 @@ function runTrace() {
     ).join('');
 
     const col = sc.conf >= 80 ? 'var(--green)' : sc.conf >= 65 ? 'var(--indigo-soft)' : 'var(--amber)';
+    const prose = buildNatural(sc, mems);
+
+    // Stash the sealed-trace state so the tamper demo can break & restore it.
+    CUR = { agent, hash, decision: sc.decision, prose };
+    tampered = false;
 
     document.getElementById('traceCard').style.display = 'flex';
     document.getElementById('traceCard').innerHTML = `
       <div class="trace-card">
         <div>
           <div class="tc-label">⬡ CRONOS TRACE · ${agent}</div>
-          <div class="tc-decision">${sc.decision}</div>
+          <div class="tc-decision" id="tcDecision">${sc.decision}</div>
         </div>
         <div>
           <div class="tc-label" style="margin-bottom:8px">Why?</div>
@@ -517,12 +588,17 @@ function runTrace() {
             <span class="conf-label">${sc.conf}%</span>
           </div>
         </div>
-        <div class="hash-row">
-          <span class="hash-ok">✅</span>
-          <span>Chain verified · <code>${hash}</code></span>
-          <span style="flex:1"></span>
-          <code style="color:var(--muted-2)">/cronos explain ${hash}</code>
+        <div>
+          <div class="tc-label" style="margin-bottom:6px">In plain language</div>
+          <div class="tc-prose" id="tcProse">${prose}</div>
         </div>
+        <div class="hash-row" id="hashRow">
+          <span class="hash-ok" id="hashIcon">✅</span>
+          <span id="hashText">Chain verified · <code>${hash}</code></span>
+          <span style="flex:1"></span>
+          <button class="tamper-btn" id="tamperBtn" onclick="toggleTamper()">⚡ Tamper with trace</button>
+        </div>
+        <div class="explain-hint"><code>/cronos explain ${hash}</code></div>
         <div class="steps-section">
           <div class="tc-label" style="margin-bottom:8px">Full step log</div>
           ${stepsHtml}
