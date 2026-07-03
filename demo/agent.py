@@ -5,7 +5,9 @@ Demonstrates the CronosTracer SDK in a realistic scenario.
 When triggered by a message containing "ticket #<N>" (or "fix" / "resolve"),
 the agent:
   1. Opens a CRONOS trace
-  2. Recalls 2–3 relevant memories from a deterministic in-memory store
+  2. Recalls relevant memories — via the Slack Real-time Search API
+     (assistant.search.context) when available, with a deterministic
+     local fallback. The recall SOURCE is recorded in the trace.
   3. Calls two mock tools (Jira, GitHub)
   4. Generates two hypotheses
   5. Evaluates evidence
@@ -13,9 +15,10 @@ the agent:
   7. Makes a decision with a confidence score
   8. Posts the agent reply + CRONOS trace card in the same thread
 
-This is intentionally self-contained — no external APIs required.
-The "memory" and "tool" results are deterministic from the ticket number,
-so the demo is reproducible without any backend services.
+The Jira/GitHub tools remain deterministic mocks so the demo is
+reproducible without external backends. The RECALL step is real:
+it searches the workspace's own conversational history through the
+RTS API, permission-scoped to what the triggering user can see.
 """
 
 import logging
@@ -24,11 +27,11 @@ from fractions import Fraction
 
 from cronos import CronosTracer, TraceStore
 from slack.output import format_trace_card
+from demo.recall import WorkspaceRecall
 
 log = logging.getLogger("cronos.demo")
 
-# ── Deterministic mock memory ─────────────────────────────────────────────────
-# In a real system this would be a Raven / SQLite / vector store recall.
+# ── Deterministic local memory (fallback when RTS is unavailable) ─────────────
 
 _MEMORIES = [
     {
@@ -65,7 +68,7 @@ _MEMORIES = [
 
 
 def _recall_memories(text: str) -> list[dict]:
-    """Return top-2 memories by keyword overlap with the message text."""
+    """Return top-2 local memories by keyword overlap. RTS fallback path."""
     t = text.lower()
     scored = []
     for mem in _MEMORIES:
@@ -73,7 +76,7 @@ def _recall_memories(text: str) -> list[dict]:
         if hits > 0:
             scored.append((hits, mem))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [m for _, m in scored[:2]]
+    return [dict(m) for _, m in scored[:2]]
 
 
 # ── Mock tool responses ────────────────────────────────────────────────────────
@@ -162,6 +165,7 @@ class DemoAgent:
 
     def __init__(self, store: TraceStore) -> None:
         self._store = store
+        self._recall = WorkspaceRecall(local_fallback=_recall_memories)
 
     async def handle_message(
         self,
@@ -171,6 +175,7 @@ class DemoAgent:
         thread_ts: str,
         say,
         client,
+        action_token: str = "",
     ) -> None:
         if not self._TRIGGER.search(text):
             return  # not for us
@@ -195,10 +200,24 @@ class DemoAgent:
             objective=objective,
         ) as t:
 
-            # Step 1 — Recall memories
-            memories = _recall_memories(text)
+            # Step 1 — Recall memories via RTS API (fallback: local store).
+            # The recall source is recorded as a TOOL step so the trace
+            # documents the PROVENANCE of every memory it used.
+            memories, recall_source = await self._recall.recall(
+                client=client,
+                text=text,
+                channel_id=channel_id,
+                action_token=action_token,
+            )
+            t.call_tool(
+                "workspace_recall",
+                f"assistant.search.context → source={recall_source}, "
+                f"{len(memories)} memories retrieved",
+            )
             for mem in memories:
-                t.record_recall(mem["id"], mem["summary"], score=mem["confidence"])
+                t.record_recall(
+                    mem["id"], mem["summary"], score=mem.get("confidence"),
+                )
 
             # Step 2 — Call Jira
             category, priority, status = _mock_jira(ticket_num, text)
