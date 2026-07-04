@@ -28,6 +28,53 @@ def _make_trace(store, agent_id="agent-A", channel="C1", user="U1",
     return store.get_latest_trace()
 
 
+class TestStepTamperEvidence:
+    """The seal must bind the reasoning trace, not only the header fields."""
+
+    def test_forged_evidence_breaks_chain(self, store):
+        trace = _make_trace(store)
+        ok, errors = store.chain.verify()
+        assert ok is True, errors
+
+        # Adversary rewrites a piece of evidence directly in the DB, post-hoc.
+        store._conn.execute(
+            "UPDATE trace_steps SET payload = ? WHERE trace_id = ? AND kind = 'evidence'",
+            ('{"supports": "h1", "text": "FORGED"}', trace.trace_id),
+        )
+        store._conn.commit()
+
+        ok, errors = store.chain.verify()
+        assert ok is False
+        assert any("steps_hash mismatch" in e for e in errors)
+
+    def test_untampered_steps_verify_ok(self, store):
+        _make_trace(store)
+        _make_trace(store, agent_id="agent-B")
+        ok, errors = store.chain.verify()
+        assert ok is True, errors
+
+
+class TestConfidenceCorruption:
+    """A stored confidence that fails to parse must be flagged, not hidden."""
+
+    def test_corrupt_confidence_is_flagged(self, store):
+        trace = _make_trace(store)
+        store._conn.execute(
+            "UPDATE traces SET confidence = 'not-a-fraction' WHERE trace_id = ?",
+            (trace.trace_id,),
+        )
+        store._conn.commit()
+        loaded = store.load_trace(trace.trace_id)
+        assert loaded.confidence is None
+        assert loaded.confidence_corrupt is True
+
+    def test_valid_confidence_not_flagged(self, store):
+        trace = _make_trace(store)
+        loaded = store.load_trace(trace.trace_id)
+        assert loaded.confidence == Fraction(74, 100)
+        assert loaded.confidence_corrupt is False
+
+
 class TestStoreBasic:
     def test_save_and_load_roundtrip(self, store):
         trace = _make_trace(store)

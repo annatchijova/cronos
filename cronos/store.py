@@ -12,7 +12,7 @@ from typing import Optional
 
 log = logging.getLogger("cronos.store")
 
-from .chain import TraceChain
+from .chain import TraceChain, _steps_hash
 from .models import Trace, TraceStep, StepKind, TraceQuality
 
 
@@ -133,11 +133,27 @@ class TraceStore:
         conf_str = _fraction_to_str(trace.confidence)
         decision  = trace.decision or ""
 
+        # Serialize every step exactly once.  The same JSON string is both
+        # hashed into the seal and persisted to trace_steps, so seal-time and
+        # verify-time inputs are byte-identical (no re-serialization drift).
+        step_rows = [
+            (
+                seq,
+                step.kind.value,
+                json.dumps(step.payload, ensure_ascii=False, sort_keys=True),
+                step.timestamp,
+            )
+            for seq, step in enumerate(trace.steps)
+        ]
+        steps_hash = _steps_hash(step_rows)
+
         try:
-            # Chain append — no commit, we own the transaction
+            # Chain append — no commit, we own the transaction.  steps_hash
+            # binds the reasoning trace into the tamper-evident seal.
             entry_hash = self.chain.append(
                 trace.trace_id, trace.agent_id,
                 trace.objective, decision, conf_str,
+                steps_hash=steps_hash,
             )
             trace.entry_hash = entry_hash
             trace.chain_ok   = True
@@ -160,15 +176,11 @@ class TraceStore:
                 trace.cronos_version or None,
             ))
 
-            for seq, step in enumerate(trace.steps):
+            for (seq, kind, payload_json, timestamp) in step_rows:
                 self._conn.execute("""
                     INSERT INTO trace_steps (trace_id, seq, kind, payload, timestamp)
                     VALUES (?, ?, ?, ?, ?)
-                """, (
-                    trace.trace_id, seq, step.kind.value,
-                    json.dumps(step.payload, ensure_ascii=False, sort_keys=True),
-                    step.timestamp,
-                ))
+                """, (trace.trace_id, seq, kind, payload_json, timestamp))
 
             self._conn.commit()  # single commit: chain + header + steps
 
@@ -213,6 +225,17 @@ class TraceStore:
         contradictions = json.loads(contradictions_json) if contradictions_json else []
         conf_warnings = json.loads(conf_warnings_json) if conf_warnings_json else []
 
+        # Honest degradation (§5.3): a stored confidence that is present but
+        # unparseable must be surfaced, not silently mimicked as "no confidence".
+        # A non-empty string that _str_to_fraction cannot parse is corruption.
+        confidence_val = _str_to_fraction(confidence)
+        confidence_corrupt = bool(confidence) and confidence_val is None
+        if confidence_corrupt:
+            log.warning(
+                "Trace %s: stored confidence %r is corrupt — flagging, not hiding",
+                tid, confidence,
+            )
+
         return Trace(
             trace_id=tid,
             agent_id=agent_id,
@@ -221,7 +244,8 @@ class TraceStore:
             objective=objective,
             steps=steps,
             decision=decision or None,
-            confidence=_str_to_fraction(confidence),
+            confidence=confidence_val,
+            confidence_corrupt=confidence_corrupt,
             started_at=started_at,
             closed_at=closed_at,
             entry_hash=entry_hash,
