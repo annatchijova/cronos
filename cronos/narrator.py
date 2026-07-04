@@ -128,7 +128,13 @@ class Narrator:
         quality_label = quality.value if quality else "UNKNOWN"
 
         # Confidence warnings (ceiling/floor clamping)
-        conf_warnings = self.trace.confidence_warnings or []
+        conf_warnings = list(self.trace.confidence_warnings or [])
+        # Surface load-time corruption instead of letting it read as "unknown".
+        if self.trace.confidence_corrupt:
+            conf_warnings.insert(
+                0, "Stored confidence was corrupt and could not be read — "
+                   "displayed value is not trustworthy."
+            )
 
         # Contradictions detected
         contradictions = self.trace.contradictions or []

@@ -225,6 +225,17 @@ class TraceStore:
         contradictions = json.loads(contradictions_json) if contradictions_json else []
         conf_warnings = json.loads(conf_warnings_json) if conf_warnings_json else []
 
+        # Honest degradation (§5.3): a stored confidence that is present but
+        # unparseable must be surfaced, not silently mimicked as "no confidence".
+        # A non-empty string that _str_to_fraction cannot parse is corruption.
+        confidence_val = _str_to_fraction(confidence)
+        confidence_corrupt = bool(confidence) and confidence_val is None
+        if confidence_corrupt:
+            log.warning(
+                "Trace %s: stored confidence %r is corrupt — flagging, not hiding",
+                tid, confidence,
+            )
+
         return Trace(
             trace_id=tid,
             agent_id=agent_id,
@@ -233,7 +244,8 @@ class TraceStore:
             objective=objective,
             steps=steps,
             decision=decision or None,
-            confidence=_str_to_fraction(confidence),
+            confidence=confidence_val,
+            confidence_corrupt=confidence_corrupt,
             started_at=started_at,
             closed_at=closed_at,
             entry_hash=entry_hash,
