@@ -51,6 +51,7 @@ class Trace:
     steps: list[TraceStep] = field(default_factory=list)
     decision: Optional[str] = None           # final decision text
     confidence: Optional[Fraction] = None    # 0–1, no floats
+    confidence_corrupt: bool = False         # stored confidence failed to parse on load
     started_at: Optional[str] = None         # UTC ISO-8601
     closed_at: Optional[str] = None          # UTC ISO-8601
     entry_hash: Optional[str] = None         # SHA-256 from the chain
