@@ -26,9 +26,10 @@ echo ""
 # Python version check (3.10+)
 command -v python3 >/dev/null 2>&1 || err "python3 not found"
 PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PY_MAJ=$(echo "$PY_VER" | cut -d. -f1)
-PY_MIN=$(echo "$PY_VER" | cut -d. -f2)
-[[ "$PY_MAJ" -ge 3 && "$PY_MIN" -ge 10 ]] || err "Python 3.10+ required (found $PY_VER)"
+# Let Python compare the version tuple — a shell "major>=3 AND minor>=10" test
+# is wrong (it rejects e.g. 4.2, whose minor 2 is < 10).
+python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" \
+    || err "Python 3.10+ required (found $PY_VER)"
 ok "Python $PY_VER"
 
 # Virtual environment
@@ -66,5 +67,5 @@ echo ""
 echo "Next steps:"
 echo "  source .venv/bin/activate"
 echo "  python3 main.py                   # local run (Socket Mode)"
-echo "  pytest                             # 104 tests"
+echo "  pytest                             # run the test suite"
 echo "  docker compose up                  # Docker"
