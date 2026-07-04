@@ -12,7 +12,7 @@ from typing import Optional
 
 log = logging.getLogger("cronos.store")
 
-from .chain import TraceChain
+from .chain import TraceChain, _steps_hash
 from .models import Trace, TraceStep, StepKind, TraceQuality
 
 
@@ -133,11 +133,27 @@ class TraceStore:
         conf_str = _fraction_to_str(trace.confidence)
         decision  = trace.decision or ""
 
+        # Serialize every step exactly once.  The same JSON string is both
+        # hashed into the seal and persisted to trace_steps, so seal-time and
+        # verify-time inputs are byte-identical (no re-serialization drift).
+        step_rows = [
+            (
+                seq,
+                step.kind.value,
+                json.dumps(step.payload, ensure_ascii=False, sort_keys=True),
+                step.timestamp,
+            )
+            for seq, step in enumerate(trace.steps)
+        ]
+        steps_hash = _steps_hash(step_rows)
+
         try:
-            # Chain append — no commit, we own the transaction
+            # Chain append — no commit, we own the transaction.  steps_hash
+            # binds the reasoning trace into the tamper-evident seal.
             entry_hash = self.chain.append(
                 trace.trace_id, trace.agent_id,
                 trace.objective, decision, conf_str,
+                steps_hash=steps_hash,
             )
             trace.entry_hash = entry_hash
             trace.chain_ok   = True
@@ -160,15 +176,11 @@ class TraceStore:
                 trace.cronos_version or None,
             ))
 
-            for seq, step in enumerate(trace.steps):
+            for (seq, kind, payload_json, timestamp) in step_rows:
                 self._conn.execute("""
                     INSERT INTO trace_steps (trace_id, seq, kind, payload, timestamp)
                     VALUES (?, ?, ?, ?, ?)
-                """, (
-                    trace.trace_id, seq, step.kind.value,
-                    json.dumps(step.payload, ensure_ascii=False, sort_keys=True),
-                    step.timestamp,
-                ))
+                """, (trace.trace_id, seq, kind, payload_json, timestamp))
 
             self._conn.commit()  # single commit: chain + header + steps
 
