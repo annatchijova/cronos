@@ -13,11 +13,16 @@ Three output levels:
 All synthesis is deterministic rule-based NLG from structured step data.
 """
 
+import re
 from fractions import Fraction
 from typing import Optional
 
 from .models import Trace, StepKind, TraceQuality
 from .quality import devils_advocate as _devils_advocate
+
+# A 4-digit year 2020-2039 as a whole token.  Word boundaries avoid matching a
+# year embedded in a larger number (e.g. "2024" inside ticket id "12024567").
+_YEAR_RE = re.compile(r"\b20[2-3]\d\b")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,7 +102,7 @@ class Narrator:
         # First recall that references a year — treat as "matching incident"
         for r in self._recalls:
             summary = r.payload.get("summary", "")
-            if any(str(y) in summary for y in range(2020, 2031)):
+            if _YEAR_RE.search(summary):
                 why.append(("✓", f"Found matching incident — {summary[:80]}"))
                 break
 
