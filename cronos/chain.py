@@ -4,10 +4,24 @@ Adapted from the CORVUS AuditChain (VIGÍA AI Collective, Apache 2.0).
 
 Each closed trace appends one entry whose SHA-256 hash incorporates:
   - all trace metadata (agent_id, objective, decision, confidence)
+  - a steps_hash binding the full reasoning trace (recalls, tools,
+    hypotheses, discards, evidence, decision) — see _steps_hash
+  - the entry timestamp (see the design note below)
   - the hash of the preceding entry
 
-Any retroactive modification of a trace breaks every subsequent hash.
-The chain can be exported and verified independently of the running process.
+Any retroactive modification of a trace — header field OR reasoning step —
+breaks every subsequent hash. The chain can be exported and verified
+independently of the running process.
+
+Design note — timestamp is sealed on purpose.
+  CLAUDE.md §5.2 records chain-of-custody timestamps *outside* the sealed
+  payload, because that rule targets a *reproducible result seal* (same
+  inputs must yield identical bytes). This is an append-only *audit* chain,
+  where each entry is already unique (prev_hash linkage + UUID trace_id), and
+  binding *when* a decision was sealed is a feature: it makes the recorded
+  time itself tamper-evident. Moving the timestamp outside the seal would let
+  an attacker backdate an entry without breaking the hash — strictly weaker.
+  The deviation from §5.2 is therefore deliberate and scoped to this file.
 """
 
 import hashlib
