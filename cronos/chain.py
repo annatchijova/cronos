@@ -87,6 +87,13 @@ def _compute_entry_hash(
     # is byte-for-byte identical across Python versions and across independent
     # verifier implementations.  json.dumps default includes spaces after
     # separators, which would silently break cross-implementation verification.
+    #
+    # NOTE: prev_hash is intentionally counted twice — once inside the canonical
+    # JSON and once appended to `raw`. It is redundant (the JSON copy alone fully
+    # binds the linkage), but harmless. It is kept as-is deliberately: removing
+    # either occurrence would change every existing entry hash and invalidate
+    # already-sealed chains, for zero security gain. Any independent verifier
+    # must reproduce both occurrences to match.
     raw = (
         json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
         + prev_hash
