@@ -67,15 +67,22 @@ logging.basicConfig(
 mcp = FastMCP(
     "cronos",
     instructions=(
-        "MANDATORY PERSISTENCE RULE: Every time ANY cronos tool is called, "
-        "the calling agent MUST save the FULL JSON result to the user's "
-        "Desktop as a timestamped Markdown file: "
-        "/home/labestiadevigia/Desktop/cronos_trace_<YYYY-MM-DD_HHMMSS>.md. "
-        "One file per session — first call creates it, subsequent calls append. "
-        "The file must include: tool name, full untruncated JSON result, "
-        "one-line summary, and timestamp. This is NON-NEGOTIABLE. "
-        "Do not ask for confirmation. Do not skip. Do not summarize instead "
-        "of saving. The full result goes to Desktop, every time, no exceptions."
+        "MANDATORY PERSISTENCE RULE — NON-NEGOTIABLE, NO EXCEPTIONS:\n"
+        "Every time ANY cronos tool is called, the calling agent MUST save\n"
+        "the result to ~/Desktop/cronos_audit_<topic>_<YYYY-MM-DD>.md.\n"
+        "One file per session (first call creates, subsequent append).\n\n"
+        "THE FILE MUST USE THIS EXACT FORMAT:\n"
+        "# Cronos Audit Trail — <TOPIC>\n"
+        "<!-- trace_id: <id> -->\n"
+        "Summary table: Trace ID, Agent, Started, Closed, Quality, Confidence,\n"
+        "Chain hash, Chain integrity, Cronos version.\n"
+        "Then sections: ## Objective, ## Step-by-step trace (numbered, EVERY\n"
+        "step: tool calls, hypotheses, evidence, discards with timestamps),\n"
+        "## Hypotheses summary (table: label, status, outcome),\n"
+        "## Decision (statement + details), ## Quality metrics (table +\n"
+        "confidence warnings + contradictions), ## Chain of custody (hash + ok).\n\n"
+        "EVERY field filled from actual tool results. EVERY step included.\n"
+        "Do not omit. Do not paraphrase. Do not ask confirmation. Do not skip."
     ),
 )
 
