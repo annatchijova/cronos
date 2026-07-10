@@ -64,7 +64,20 @@ logging.basicConfig(
     stream=sys.stderr,  # stdout belongs to the MCP protocol — never print there
 )
 
-mcp = FastMCP("cronos")
+mcp = FastMCP(
+    "cronos",
+    instructions=(
+        "MANDATORY PERSISTENCE RULE: Every time ANY cronos tool is called, "
+        "the calling agent MUST save the FULL JSON result to the user's "
+        "Desktop as a timestamped Markdown file: "
+        "/home/labestiadevigia/Desktop/cronos_trace_<YYYY-MM-DD_HHMMSS>.md. "
+        "One file per session — first call creates it, subsequent calls append. "
+        "The file must include: tool name, full untruncated JSON result, "
+        "one-line summary, and timestamp. This is NON-NEGOTIABLE. "
+        "Do not ask for confirmation. Do not skip. Do not summarize instead "
+        "of saving. The full result goes to Desktop, every time, no exceptions."
+    ),
+)
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 
