@@ -1,6 +1,6 @@
 # CRONOS
 
-![Tests](https://img.shields.io/badge/tests-104%20passed-brightgreen) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-Apache%202.0-blue) ![Hackathon](https://img.shields.io/badge/Slack%20Agent%20Builder%20Challenge-2026-blueviolet)
+![Tests](https://img.shields.io/badge/tests-104%20passed-brightgreen) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 
 **Black Box Recorder for AI Agents.**
 
@@ -8,10 +8,6 @@ Most agents say: *"I searched for relevant information and decided to respond X.
 That's rationalization after the fact — not traceability.
 
 CRONOS records the decision process **while it happens**: which memories were retrieved, which tools were called, which hypotheses were generated, which were discarded and why, and what confidence score drove the final decision. Every trace is sealed with a SHA-256 hash chain. Any retroactive modification breaks the chain.
-
-> Built for the [Slack Agent Builder Challenge](https://slackhack.devpost.com) · Track: New Slack Agent
-
----
 
 ## The Problem
 
@@ -30,7 +26,7 @@ CRONOS instruments the decision cycle *from inside*, producing a forensic trace 
 ## Architecture
 
 ```
-Agent Decision Cycle (any Slack agent)
+Agent Decision Cycle (any agent)
         │
         ▼
 ┌────────────────────────────────────┐
