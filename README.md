@@ -169,6 +169,9 @@ cronos/
 │   └── output.py       Block Kit formatters
 ├── demo/
 │   └── agent.py        Demo support ticket resolver using the SDK
+├── web/
+│   ├── app.py          Read-only FastAPI dashboard + JSON API
+│   └── static/         Dashboard SPA (vanilla JS, no build step)
 ├── tests/
 │   ├── test_tracer.py   (28 tests)
 │   ├── test_chain.py    (15 tests)
@@ -342,6 +345,32 @@ bash install.sh
 `install.sh` creates a `.venv`, installs the package in editable mode with dev dependencies, and generates a `.env` template for your Slack credentials.
 
 CRONOS works two ways: as a standalone Python SDK (no Slack required — see **SDK Usage** above), or with the Slack bot for `/cronos explain`, `/cronos trace`, and `/cronos audit` posted inline in a channel. Pick whichever fits your use case; the Slack layer is optional.
+
+---
+
+## Web Dashboard
+
+A read-only web UI for browsing sealed traces — trace list with quality badges and confidence bars, full trace detail (step timeline, hypotheses kept vs. discarded, evidence, contradictions, devil's advocate), on-demand chain verification and audit export. Bilingual (EN/ES), no build step.
+
+```bash
+pip install -e ".[ui]"                 # FastAPI + uvicorn (optional extra)
+python demo_seed.py --reset            # optional: seed 8 demo traces
+python -m web                          # http://127.0.0.1:8300/dashboard
+```
+
+Configuration via environment: `CRONOS_DB_PATH` (same database the bot and MCP server write to), `CRONOS_WEB_HOST` (default `127.0.0.1`), `CRONOS_WEB_PORT` (default `8300`). Or run `uvicorn web.app:app --reload` during development.
+
+The JSON API mirrors the MCP tool contract — fractions travel as `"p/q"` strings, never floats:
+
+```bash
+curl localhost:8300/api/traces                  # list (agent_id, limit, offset)
+curl localhost:8300/api/traces/<trace_id>       # full narrated detail + raw steps
+curl localhost:8300/api/verify                  # recompute the SHA-256 chain
+curl localhost:8300/api/stats                   # per-agent counts, quality histogram
+curl -O localhost:8300/api/audit/export         # downloadable chain export
+```
+
+Try the tamper demo: `python demo_seed.py --tamper`, then hit **Verify chain** in the dashboard — the exact forged entry is reported.
 
 ---
 
