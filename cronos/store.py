@@ -285,26 +285,61 @@ class TraceStore:
         self,
         agent_id: Optional[str] = None,
         limit: int = 10,
+        offset: int = 0,
     ) -> list[dict]:
         """Return lightweight headers (no steps) for listing."""
         if agent_id:
             rows = self._conn.execute("""
                 SELECT trace_id, agent_id, objective, decision, confidence,
-                       closed_at, entry_hash, chain_ok
-                FROM traces WHERE agent_id = ? ORDER BY closed_at DESC LIMIT ?
-            """, (agent_id, limit)).fetchall()
+                       closed_at, entry_hash, chain_ok, quality, diversity, contradictions
+                FROM traces WHERE agent_id = ? ORDER BY closed_at DESC LIMIT ? OFFSET ?
+            """, (agent_id, limit, offset)).fetchall()
         else:
             rows = self._conn.execute("""
                 SELECT trace_id, agent_id, objective, decision, confidence,
-                       closed_at, entry_hash, chain_ok
-                FROM traces ORDER BY closed_at DESC LIMIT ?
-            """, (limit,)).fetchall()
+                       closed_at, entry_hash, chain_ok, quality, diversity, contradictions
+                FROM traces ORDER BY closed_at DESC LIMIT ? OFFSET ?
+            """, (limit, offset)).fetchall()
 
         keys = [
             "trace_id", "agent_id", "objective", "decision", "confidence",
-            "closed_at", "entry_hash", "chain_ok",
+            "closed_at", "entry_hash", "chain_ok", "quality", "diversity",
         ]
-        return [dict(zip(keys, r)) for r in rows]
+        out = []
+        for r in rows:
+            header = dict(zip(keys, r[:-1]))
+            try:
+                header["contradiction_count"] = len(json.loads(r[-1] or "[]"))
+            except (ValueError, TypeError):
+                header["contradiction_count"] = 0
+            out.append(header)
+        return out
+
+    def stats(self) -> dict:
+        """
+        Aggregate view for dashboards: total trace count, per-agent counts
+        with latest close timestamp, and a quality-tier histogram.
+        """
+        total = self.count_traces()
+        agent_rows = self._conn.execute("""
+            SELECT agent_id, COUNT(*), MAX(closed_at)
+            FROM traces GROUP BY agent_id ORDER BY MAX(closed_at) DESC
+        """).fetchall()
+        quality_rows = self._conn.execute(
+            "SELECT quality, COUNT(*) FROM traces GROUP BY quality"
+        ).fetchall()
+        quality_counts = {q.value: 0 for q in TraceQuality}
+        for quality, count in quality_rows:
+            if quality in quality_counts:
+                quality_counts[quality] += count
+        return {
+            "total": total,
+            "per_agent": [
+                {"agent_id": a, "count": c, "latest_closed_at": latest}
+                for (a, c, latest) in agent_rows
+            ],
+            "per_quality": quality_counts,
+        }
 
     def count_traces(self, agent_id: Optional[str] = None) -> int:
         if agent_id:

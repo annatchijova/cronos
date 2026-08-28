@@ -171,6 +171,49 @@ class TestStoreQueries:
                     "closed_at", "entry_hash", "chain_ok"]:
             assert key in r
 
+    def test_get_recent_traces_includes_quality_fields(self, store):
+        _make_trace(store)
+        r = store.get_recent_traces()[0]
+        assert r["quality"] == "FULL"
+        assert r["diversity"] == "1/1"  # Fraction(3, 3) normalizes on store
+        assert r["contradiction_count"] == 0
+
+    def test_get_recent_traces_counts_contradictions(self, store):
+        with CronosTracer(store, "agent-A", "C1", "U1", "Contradictory case") as t:
+            t.record_recall("M-1", "memory")
+            t.call_tool("jira", "result")
+            t.add_hypothesis("h1", "Theory one")
+            t.add_evidence("For it", supports="h1")
+            t.add_evidence("Against it", refutes="h1")
+            t.decide("Done", Fraction(1, 2))
+        r = store.get_recent_traces()[0]
+        assert r["contradiction_count"] >= 1
+
+    def test_get_recent_traces_offset(self, store):
+        for i in range(5):
+            _make_trace(store, objective=f"Task {i}")
+        all_rows = store.get_recent_traces(limit=5)
+        page = store.get_recent_traces(limit=2, offset=2)
+        assert [r["trace_id"] for r in page] == [r["trace_id"] for r in all_rows[2:4]]
+
+    def test_stats(self, store):
+        _make_trace(store, agent_id="a1")
+        _make_trace(store, agent_id="a1")
+        _make_trace(store, agent_id="a2")
+        s = store.stats()
+        assert s["total"] == 3
+        by_agent = {a["agent_id"]: a["count"] for a in s["per_agent"]}
+        assert by_agent == {"a1": 2, "a2": 1}
+        assert all(a["latest_closed_at"] for a in s["per_agent"])
+        assert s["per_quality"]["FULL"] == 3
+        assert s["per_quality"]["EMPTY"] == 0
+
+    def test_stats_empty_store(self, store):
+        s = store.stats()
+        assert s["total"] == 0
+        assert s["per_agent"] == []
+        assert set(s["per_quality"]) == {"FULL", "PARTIAL", "MINIMAL", "EMPTY"}
+
     def test_count_traces(self, store):
         assert store.count_traces() == 0
         _make_trace(store, agent_id="a1")
