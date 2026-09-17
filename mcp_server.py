@@ -46,6 +46,7 @@ Register (Claude Code / claude_desktop_config.json)
 import logging
 import os
 import sys
+import anyio
 from fractions import Fraction
 from typing import Optional
 
@@ -405,4 +406,7 @@ async def cronos_verify_chain() -> dict:
 if __name__ == "__main__":
     log.info("CRONOS MCP server starting — db=%s, slack=%s",
              _DB_PATH, "configured" if _SLACK_TOKEN else "not configured")
-    mcp.run()
+    # FastMCP's asyncio stdio bridge can starve its internal anyio memory
+    # stream in this environment. Trio is the backend used by the SDK's
+    # reference entrypoint and keeps initialize/list_tools responsive.
+    anyio.run(mcp.run_stdio_async, backend="trio")

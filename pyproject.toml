@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Black Box Recorder for AI Agents"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "mcp>=1.27,<2",
+    "trio>=0.30,<1",
+]
 
 [project.optional-dependencies]
 ui = [
